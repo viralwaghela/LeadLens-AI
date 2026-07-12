@@ -1,68 +1,296 @@
 # LeadLens AI
 
-LeadLens is an AI business operating system for small businesses. It gives an owner a calm executive workspace backed by specialized AI departments for Marketing, Sales, Finance, HR and Operations.
+# Executive Intelligence Platform for Small Businesses
 
-## What it does
+LeadLens AI is an AI-powered executive operating system designed to help founders and business owners gain complete visibility across their organization.
 
-- Creates a daily AI COO briefing from company memory
-- Converts owner updates into tasks, decisions, approvals, risks and opportunities
-- Generates complete department deliverables and stores their history
-- Exports business documents in DOCX/XLSX/TXT formats
-- Provides an executive home with company health, financial snapshot and approvals
-- Lets the owner ask questions grounded in the company's saved memory
+The platform consolidates information from multiple departments, stores organizational memory, tracks approvals, and provides AI-generated executive insights through a conversational interface.
 
-## Departments
+---
 
-- **Marketing:** strategy, content calendar, reels, captions, ads and image prompts
-- **Sales:** prospecting strategy, cold emails, WhatsApp outreach, call scripts and proposals
-- **Finance:** expense review, budgets, cash flow, profitability and forecasts
-- **HR:** job descriptions, interview packs, onboarding and performance reviews
-- **Operations:** daily plans, task assignments, bottlenecks, risks and weekly reports
+## Problem Statement
 
-## Tech stack
+Small and medium businesses often struggle with:
+
+- Information scattered across departments
+- Lack of executive visibility
+- Manual reporting and status tracking
+- Difficulty identifying priorities and risks
+- No centralized business memory
+
+LeadLens solves these challenges by acting as an AI Executive Assistant for business owners.
+
+---
+
+# Features
+
+## Executive Dashboard
+- Business health score
+- Revenue, expenses, profit and margin tracking
+- Company-wide executive overview
+
+---
+
+## AI Executive Assistant
+
+Ask natural language questions such as:
+
+```text
+What happened today?
+What approvals are pending?
+What should I prioritize?
+What are the biggest risks right now?
+Summarize the business in one paragraph.
+```
+
+The AI analyzes business memory and generates executive-level responses.
+
+---
+
+## Executive Brief Automation
+
+Automatically generates:
+
+- Daily business summaries
+- Key achievements
+- Pending decisions
+- Strategic recommendations
+
+---
+
+## Business Memory Engine
+
+Persistent storage system for:
+
+- Decisions
+- Daily logs
+- Approvals
+- Reports
+- Tasks
+- Department activities
+
+This allows LeadLens to understand historical context and answer business questions intelligently.
+
+---
+
+## Approval Workflow Engine
+
+Track and manage:
+
+- Marketing approvals
+- Budget approvals
+- Hiring approvals
+- Business decisions
+
+---
+
+## Department Intelligence Modules
+
+### Marketing
+- Campaign tracking
+- Content planning
+- Lead generation initiatives
+
+### Sales
+- Corporate wellness campaigns
+- Pipeline activities
+- Outreach initiatives
+
+### Finance
+- Revenue tracking
+- Expense monitoring
+- Profitability reporting
+
+### HR
+- Hiring activities
+- Employee initiatives
+- Recruitment workflows
+
+### Operations
+- Daily business activities
+- Process monitoring
+- Organizational reporting
+
+---
+
+# Screenshots
+
+## Executive Dashboard
+
+![Dashboard](assets/screenshots/01_dashboard.png)
+
+---
+
+## AI Executive Assistant
+
+![AI Assistant](assets/screenshots/04_ai_assistant.png)
+
+---
+
+## Executive Brief
+
+![Executive Brief](assets/screenshots/02_executive_brief.png)
+
+---
+
+## Approval Workflow
+
+![Approvals](assets/screenshots/03_approvals.png)
+
+---
+
+# Architecture
+
+```text
+Departments
+     ↓
+Business Memory Layer
+     ↓
+Executive Intelligence Engine
+     ↓
+AI Executive Assistant
+     ↓
+Executive Recommendations
+```
+
+---
+
+# Project Structure
+
+```text
+agents/                Agent registration and routing
+coo/                   COO workflows and notifications
+core/                  Shared business utilities
+executive/             Executive dashboard and AI logic
+finance/               Finance intelligence modules
+hr/                    HR workflows
+marketing/             Marketing intelligence
+operations/            Operations monitoring
+sales/                 Sales workflows
+services/              AI and utility services
+database/              Business memory layer
+generated/             Generated reports and exports
+assets/                Screenshots and documentation
+```
+
+---
+
+# Technology Stack
 
 - Python
 - Streamlit
 - OpenRouter API
-- JSON-based business memory
-- python-docx and openpyxl
+- JSON Business Memory System
+- Modular AI Architecture
 
-## Local setup
+---
 
-```powershell
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-python -m streamlit run app.py
+# Installation
+
+### Clone Repository
+
+```bash
+git clone https://github.com/viralwaghela/LeadLens-AI.git
+cd LeadLens-AI
 ```
 
-Add your OpenRouter key to `.env` before using AI features.
+### Create Virtual Environment
 
-## Project structure
+```bash
+python -m venv venv
+```
+
+### Activate Environment
+
+#### Windows
+
+```bash
+venv\Scripts\activate
+```
+
+#### Mac/Linux
+
+```bash
+source venv/bin/activate
+```
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Configure Environment Variables
+
+```
+
+### Run Application
+
+```bash
+streamlit run app.py
+```
+
+---
+
+# Example Questions
 
 ```text
-agents/       Agent registration and routing
-core/         Business memory, activity and notifications
-coo/          COO planning and business-health logic
-executive/    Executive-home metrics and summaries
-marketing/    Marketing generation and exporters
-sales/        Sales generation and exporters
-finance/      Finance generation and exporters
-hr/           HR generation and exporters
-operations/   Operations generation and exporters
-ui/           Department workspaces
-services/     AI and JSON utilities
-database/     Local business memory
-generated/    Generated deliverables
+What happened today?
+What should I prioritize?
+What approvals are pending?
+Summarize the business.
+What are the biggest risks?
 ```
 
-## Security notes
+---
 
-- Never commit `.env` or API keys.
-- The bundled JSON database is suitable for a local demo, not multi-user production.
-- Authentication, hosted persistence and role permissions belong in the deployment roadmap.
+# Current Status
 
-## Current status
+## LeadLens v1.0 Complete
 
-LeadLens v1 includes the complete local executive workflow and all five departments. The next production step is deployment hardening: authentication, a hosted database, background jobs and integrations.
+Implemented:
+
+- Executive Dashboard
+- AI Executive Assistant
+- Business Memory Engine
+- Approval System
+- Executive Brief Automation
+- Department Intelligence Modules
+
+---
+
+# Roadmap (V2)
+
+Planned Features:
+
+- Gmail Integration
+- Google Calendar Integration
+- Automated Daily Executive Briefs
+- Claude-style AI Workspace
+- Multi-Agent Collaboration
+- Notification Center
+- Database Migration (SQLite/PostgreSQL)
+- Role-Based Access Control
+- Advanced Analytics
+
+---
+
+# Security Notes
+
+- `.env` files are excluded from version control.
+- API keys should never be committed.
+- Current business memory uses JSON and is intended for local usage.
+
+---
+
+# Author
+
+## Viral Waghela
+
+AI Automation | Executive Intelligence Systems | Business Process Automation
+
+---
+
+# Future Vision
+
+LeadLens aims to become an AI-powered operating system for founders, capable of acting as an intelligent chief of staff by monitoring business activities, identifying risks, recommending actions and automating executive workflows.
