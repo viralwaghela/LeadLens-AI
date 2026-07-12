@@ -1,3 +1,11 @@
 __pycache__/
-*.pyc
+*.py[cod]
 .env
+venv/
+.venv/
+.streamlit/secrets.toml
+.pytest_cache/
+.DS_Store
+Thumbs.db
+generated/
+database/*.corrupt.json

@@ -1,53 +1,68 @@
 # LeadLens AI
 
-LeadLens AI is a Python-based AI business research assistant that generates structured company research and growth strategy reports using an LLM API.
+LeadLens is an AI business operating system for small businesses. It gives an owner a calm executive workspace backed by specialized AI departments for Marketing, Sales, Finance, HR and Operations.
 
-## Features
+## What it does
 
-- Company research report generator
+- Creates a daily AI COO briefing from company memory
+- Converts owner updates into tasks, decisions, approvals, risks and opportunities
+- Generates complete department deliverables and stores their history
+- Exports business documents in DOCX/XLSX/TXT formats
+- Provides an executive home with company health, financial snapshot and approvals
+- Lets the owner ask questions grounded in the company's saved memory
 
-- Competitor analysis
+## Departments
 
-- SWOT-style analysis
+- **Marketing:** strategy, content calendar, reels, captions, ads and image prompts
+- **Sales:** prospecting strategy, cold emails, WhatsApp outreach, call scripts and proposals
+- **Finance:** expense review, budgets, cash flow, profitability and forecasts
+- **HR:** job descriptions, interview packs, onboarding and performance reviews
+- **Operations:** daily plans, task assignments, bottlenecks, risks and weekly reports
 
-- Marketing ideas
-
-- Quick wins
-
-- 30-day action plan
-
-- Recommended AI tools stack
-
-- Priority score with reasoning
-
-- Multiple focus area selection
-
-- AI-powered output using OpenRouter API
-
-## Technologies Used
+## Tech stack
 
 - Python
-
+- Streamlit
 - OpenRouter API
+- JSON-based business memory
+- python-docx and openpyxl
 
-- Requests
+## Local setup
 
-- Environment Variables
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+python -m streamlit run app.py
+```
 
-- Git
+Add your OpenRouter key to `.env` before using AI features.
 
-## Future Improvements
+## Project structure
 
-- Web scraping
+```text
+agents/       Agent registration and routing
+core/         Business memory, activity and notifications
+coo/          COO planning and business-health logic
+executive/    Executive-home metrics and summaries
+marketing/    Marketing generation and exporters
+sales/        Sales generation and exporters
+finance/      Finance generation and exporters
+hr/           HR generation and exporters
+operations/   Operations generation and exporters
+ui/           Department workspaces
+services/     AI and JSON utilities
+database/     Local business memory
+generated/    Generated deliverables
+```
 
-- Live competitor research
+## Security notes
 
-- Website analysis
+- Never commit `.env` or API keys.
+- The bundled JSON database is suitable for a local demo, not multi-user production.
+- Authentication, hosted persistence and role permissions belong in the deployment roadmap.
 
-- PDF report export
+## Current status
 
-- Market trend analysis
-
-- Lead generation suggestions
-
-- CRM integration
+LeadLens v1 includes the complete local executive workflow and all five departments. The next production step is deployment hardening: authentication, a hosted database, background jobs and integrations.
