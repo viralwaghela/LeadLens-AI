@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe tests/*.py)",
+      "Bash(./.venv/Scripts/python.exe tests/*.py)",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe scheduler/run_scheduled_checks.py)",
+      "Bash(./.venv/Scripts/python.exe scheduler/run_scheduled_checks.py)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(ls)",
+      "Bash(ls *)",
+      "Bash(cat *)"
+    ],
+    "deny": [
+      "Bash(cat .env)",
+      "Bash(cat .env.local)",
+      "Bash(rm *)",
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(pip install*)",
+      "Bash(python -m pip install*)",
+      "Bash(*/pip install*)",
+      "Bash(*/pip.exe install*)"
+    ]
+  }
+}
