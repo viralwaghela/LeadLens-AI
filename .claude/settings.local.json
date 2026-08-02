@@ -16,7 +16,10 @@
       "Bash(jobs -l)",
       "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\concurrent_writer.py\" A 6)",
       "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\concurrent_writer.py\" B 6)",
-      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\app_write_simulator.py\")"
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\app_write_simulator.py\")",
+      "Bash(grep -v \"^\\\\./services/briefing_engine\\\\.py$\")",
+      "Bash(grep -v \"^\\\\./ui/jarvis_center\\\\.py$\")",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe tests/test_memory_locking.py)"
     ]
   }
 }

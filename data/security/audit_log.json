@@ -418,5 +418,47 @@
     "action": "prepare_execution",
     "entity": "whatsapp",
     "detail": "EXEC-DF9D52CCA9"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:34",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-8C6F7E31DA"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:34",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-8C6F7E31DA"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:34",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-8C6F7E31DA:Simulated"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:34",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-09990393BC"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:34",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-09990393BC"
+  },
+  {
+    "timestamp": "2026-08-02T08:56:38",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-BD07188366"
   }
 ]

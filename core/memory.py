@@ -197,14 +197,27 @@ def _sqlite_load_raw() -> str:
 
 
 def _sqlite_save_raw(payload: str) -> None:
+    """Unconditional overwrite (no optimistic-lock check) — but it still
+    must bump `version`, or a concurrent update_memory() that read the row
+    before this write won't detect this write happened and will silently
+    clobber it on its own save. `INSERT OR REPLACE` can't do that (SQLite
+    implements it as delete-then-reinsert, which would reset version to
+    its default instead of incrementing it), so this uses an explicit
+    UPDATE, falling back to INSERT only if the row doesn't exist yet."""
     conn = _sqlite_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "INSERT OR REPLACE INTO memory_store (id, payload, updated_at) VALUES (1, ?, ?)",
+        cursor = conn.execute(
+            "UPDATE memory_store SET payload = ?, version = version + 1, updated_at = ? "
+            "WHERE id = 1",
             (payload, now),
         )
+        if cursor.rowcount == 0:
+            conn.execute(
+                "INSERT INTO memory_store (id, payload, updated_at, version) VALUES (1, ?, ?, 1)",
+                (payload, now),
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -313,14 +326,18 @@ def _pg_load_raw() -> str:
 
 
 def _pg_save_raw(payload: str) -> None:
+    """Unconditional overwrite (no optimistic-lock check) — but it still
+    must bump `version` on conflict, or a concurrent update_memory() that
+    read the row before this write won't detect this write happened and
+    will silently clobber it on its own save."""
     conn = _pg_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO memory_store (id, payload, updated_at) VALUES (1, %s, %s) "
+                "INSERT INTO memory_store (id, payload, updated_at, version) VALUES (1, %s, %s, 1) "
                 "ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, "
-                "updated_at = EXCLUDED.updated_at",
+                "updated_at = EXCLUDED.updated_at, version = memory_store.version + 1",
                 (payload, now),
             )
         conn.commit()
@@ -514,7 +531,10 @@ def update_company(key, value):
 
 
 def reset_company():
-    save_memory(_fresh_default())
+    def mutate(memory):
+        memory.clear()
+        memory.update(_fresh_default())
+    update_memory(mutate)
 
 
 def get_company_value(key, default=None):
