@@ -1,134 +1,188 @@
-# LeadLens AI
+# LeadLens CareOS
 
-LeadLens is an AI business operating system for small businesses. It gives an owner a calm executive workspace backed by specialized AI departments for Marketing, Sales, Finance, HR and Operations.
+LeadLens is an AI-powered Business Operating System for physiotherapy
+clinics and similar small service businesses. **Jarvis is the product** —
+an AI Chief of Staff who manages the clinic and proactively assists the
+owner. The CRM is the substrate underneath him: the patient records,
+appointments, packages and payments Jarvis needs in order to actually do
+things for the business.
+
+The app has two linked workspaces, toggled from the sidebar via **the
+Core** (the single JARVIS/CRM switch):
+
+- **CRM workspace** — patients, appointments, treatment plans, follow-ups,
+  a clinic dashboard, payments, clinic team (therapists), and settings.
+- **JARVIS workspace** — Mission Control, Patient Intelligence, the AI
+  team (specialist agents synthesized into one voice), autonomous
+  workflows, integrations, an approval queue, business memory (Data Hub /
+  Reports / Memory Center).
+
+"Beyond Pain" (Malad, Mumbai) is the founder's own clinic and the current
+demo data — not the product's identity.
 
 ## What it does
 
-- Creates a daily AI COO briefing from company memory
-- Converts owner updates into tasks, decisions, approvals, risks and opportunities
-- Generates complete department deliverables and stores their history
-- Exports business documents in DOCX/XLSX/TXT formats
-- Provides an executive home with company health, financial snapshot and approvals
-- Lets the owner ask questions grounded in the company's saved memory
-- Audits which business and clinic sources informed Jarvis's answer
-- Routes management questions to relevant specialist AI agents
-- Gives each specialist only the read-only evidence required for its role
-- Shows which agents and data tools were consulted before Jarvis synthesised
-  the final answer
-- Retrieves relevant owner preferences, tracked recommendations and measured
-  outcomes before each consultation
-- Learns from outcomes only after the owner explicitly tracks a recommendation
-  and submits its result
-- Maintains a linked clinic CRM for patients, appointments, treatment packages,
-  payments and therapists
-- Calculates patient inactivity, renewal, consent and follow-up signals from
-  real CRM records
-- Prepares consent-aware clinic workflows behind an approval gate; no message
-  is sent automatically
-
-## Clinic CRM
-
-The local clinic CRM is available from **Departments → Patient Records** and
-supports:
-
-- Searchable patient directory with status and consent tracking
-- Linked patient profiles with appointments, packages and payments
-- Appointment scheduling and status updates
-- Package assignment, session balances and renewal signals
-- Payment recording and pending-payment totals
-- Therapist capacity records
-- Stable record IDs, relationship validation and soft archiving
-- Privacy-safe aggregate CRM context for Jarvis and specialist agents
-
-The CRM deliberately avoids detailed clinical notes in this local MVP. Patient
-identities and contact details remain outside LLM prompts.
-
-## Departments
-
-- **Marketing:** strategy, content calendar, reels, captions, ads and image prompts
-- **Sales:** prospecting strategy, cold emails, WhatsApp outreach, call scripts and proposals
-- **Finance:** expense review, budgets, cash flow, profitability and forecasts
-- **HR:** job descriptions, interview packs, onboarding and performance reviews
-- **Operations:** daily plans, task assignments, bottlenecks, risks and weekly reports
+- Jarvis builds a privacy-filtered, grounded view of the real clinic
+  (`services/jarvis_context.py`) and reasons only over that — never makes
+  things up about the business.
+- A team of specialist AI agents (`services/specialist_orchestration.py`)
+  are consulted and synthesized into a single Jarvis voice.
+- Every external action (send a message, book something) goes through an
+  approval gate (`services/integration_manager_v21.py`) — nothing fires
+  without a human approving it first. Calendar, Gmail and WhatsApp
+  integrations (`integrations/`) support both dry-run and live modes.
+- The CRM tracks patients, appointments, treatment packages, payments and
+  therapists, and derives inactivity/renewal/follow-up signals from real
+  records.
+- Business memory (`core/memory.py`) is the single source of truth for one
+  clinic's data — local SQLite by default, or Postgres (Supabase/Neon) via
+  `DATABASE_URL` so data survives regardless of what happens to the app's
+  hosting.
 
 ## Tech stack
 
-- Python
-- Streamlit
+- Python, Streamlit
 - Official OpenAI Responses API
-- JSON-based business memory
-- Atomic, structured Jarvis learning memory with outcome-linked recommendations
-- Privacy-safe clinic context aggregation with source provenance
-- Read-only specialist-agent orchestration and consultation traces
-- python-docx and openpyxl
+- SQLite (default) or Postgres via `DATABASE_URL`
+- python-docx, openpyxl, pandas for document generation
+- Google Calendar / Gmail / WhatsApp integrations (dry-run by default)
 
-## Local setup
+## Local setup (Windows)
 
 ```powershell
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
 python -m streamlit run app.py
 ```
 
-Add your OpenAI API key to `.env` before using AI features:
+Then fill in `.env` — see `.env.example` for every variable and what each
+one does. At minimum, set `OPENAI_API_KEY` for AI features to work. Set
+`APP_PASSWORD` before putting any real clinic data behind a shared URL.
 
-```env
-OPENAI_API_KEY=your_key_here
-OPENAI_MODEL=gpt-5.1
-OPENAI_FAST_MODEL=gpt-5-mini
-OPENAI_STORE_RESPONSES=false
-```
+## Running the tests
 
-Never add the real key to `.env.example`, source code or GitHub.
-
-Run the CRM regression test from the project directory:
+Install dev dependencies first (adds `pytest` on top of the app's own
+requirements):
 
 ```powershell
-python test_clinic_crm.py
+pip install -r requirements-dev.txt
 ```
+
+Most of `tests/` is pytest-style and runs with:
+
+```powershell
+python -m pytest tests/
+```
+
+A subset of `tests/` (scheduler and automation checks — `test_scheduler.py`,
+`test_memory_locking.py`, `test_appointment_reminder.py`,
+`test_capacity_alert.py`, `test_lead_qualification_alert.py`,
+`test_low_booking_alert.py`, `test_monthly_business_review.py`,
+`test_revenue_monitoring.py`, `test_waiting_list_automation.py`,
+`TEST_PHASES_21_TO_23.py`) are standalone scripts rather than pytest
+functions. Run each directly from the project root with the root on
+`PYTHONPATH`:
+
+```powershell
+$env:PYTHONPATH = "."
+python tests\test_scheduler.py
+```
+
+(Every file under `tests/` imports `tests/_bootstrap.py` first, which
+guarantees a test can never accidentally reach the real Postgres database
+even if `DATABASE_URL` is set in `.env`.)
 
 ## Project structure
 
 ```text
-agents/       Agent registration and routing
-core/         Business memory, activity and notifications
-coo/          COO planning and business-health logic
-executive/    Executive-home metrics and summaries
-marketing/    Marketing generation and exporters
-sales/        Sales generation and exporters
-finance/      Finance generation and exporters
-hr/           HR generation and exporters
-operations/   Operations generation and exporters
-ui/           Department workspaces
-services/     AI and JSON utilities
-database/     Local business memory
-generated/    Generated deliverables
+app.py            Entry point: login gate, then CRM or onboarding
+dashboard.py      Workspace router — the Core switch, CRM/JARVIS nav
+onboarding.py     First-run clinic setup
+core/             Business memory (SQLite/Postgres), auth
+services/         AI connector, specialist orchestration, Jarvis context,
+                  integration/approval manager, learning memory
+ui/               CRM and JARVIS screens (workspace_theme.py owns the
+                  locked Core-switch/theme CSS)
+integrations/     Calendar, Gmail, WhatsApp — dry-run and live modes
+scheduler/        Background automation checks
+workflows/        Autonomous workflow definitions
+database/         Local SQLite file and JSON fallbacks (gitignored)
+data/             Runtime data: security audit log, collaboration, learning
+generated/        Generated documents (gitignored)
+tests/            Regression tests for the live code (see above)
+docs/             Design specs (e.g. CORE_SWITCH_SPEC.md)
 ```
+
+## Deployment
+
+The app reads all configuration from environment variables (see
+`.env.example`). Set `APP_PASSWORD` and either leave `DATABASE_URL` unset
+(local SQLite) or point it at a managed Postgres instance before any real
+clinic data goes in — local SQLite does not survive an ephemeral
+filesystem (see the note in `.env.example`).
+
+### Streamlit Community Cloud
+
+1. Push this repo to GitHub.
+2. Create a new app pointing at `app.py`.
+3. In the app's **Secrets**, set `OPENAI_API_KEY`, `APP_PASSWORD`, and
+   `DATABASE_URL` (required here — the platform's filesystem is
+   ephemeral, so local SQLite will not persist between restarts).
+
+### Render / Railway
+
+Both platforms build directly from the included `Dockerfile`.
+
+1. Create a new Web Service from this repo.
+2. Build command: none needed (Dockerfile handles it). Start command:
+   already set in the Dockerfile's `CMD`.
+3. Set the port to `8501`.
+4. Add the same environment variables from `.env.example` in the
+   platform's dashboard (`OPENAI_API_KEY`, `APP_PASSWORD`, `DATABASE_URL`,
+   etc.) — never commit them.
+5. Use `DATABASE_URL` (Postgres) rather than local SQLite unless the
+   platform gives you a persistent disk mount.
+
+### Docker (self-hosted / local)
+
+```bash
+cp .env.example .env   # fill in real values
+docker compose up --build
+```
+
+This builds from `Dockerfile`, exposes port `8501`, and mounts
+`./database`, `./data` and `./generated` as volumes so local SQLite data
+and generated documents survive container restarts. Set `DATABASE_URL` in
+`.env` instead if you'd rather use hosted Postgres.
+
+### Local Windows
+
+See **Local setup** above — `python -m streamlit run app.py` with local
+SQLite is the default and requires no external database.
 
 ## Security notes
 
-- Never commit `.env` or API keys.
-- Patient and therapist names, contact details and clinical notes are excluded
-  from the Jarvis LLM context; the model receives aggregate clinic signals.
-- Patient records are archived rather than permanently deleted from the UI.
-- Clinic outreach candidates require recorded consent and still create an
-  approval request before any external execution.
-- The bundled JSON database is suitable for a local demo, not multi-user production.
-- Specialist tools in this build are read-only. Recorded owner preferences are
-  not treated as runtime permission, and listed channels are not treated as
-  connected integrations.
-- Normal conversations do not silently become permanent memory. Tracking a
-  recommendation and recording its outcome are explicit owner actions.
-- Authentication, hosted persistence and role permissions belong in the deployment roadmap.
+- Never commit `.env` or API keys — `.gitignore` already excludes `.env`
+  and `.streamlit/secrets.toml`.
+- Set `APP_PASSWORD` before deploying anywhere with real clinic data — the
+  app displays an on-screen warning banner whenever it is left unset.
+- Patient and therapist names, contact details and clinical notes are
+  excluded from the Jarvis LLM context; the model receives aggregate
+  clinic signals only (see `services/jarvis_context.py`).
+- Patient records are archived rather than permanently deleted from the
+  UI.
+- Every external action (WhatsApp, email, calendar) requires an explicit
+  approval before execution — nothing fires automatically.
+- The app is single-tenant: it holds exactly one clinic's data at a time.
+  Multi-tenancy (many clinics on one deployment) is a planned but not yet
+  built architecture — do not assume it is supported.
 
-## Current status
+## Current status / known gaps
 
-LeadLens v1 includes the complete local executive workflow, all five
-departments, official OpenAI reasoning, a source-aware context layer, real
-read-only specialist-agent consultation, relevant-memory retrieval, explicit
-outcome learning, approval-gated action preparation and a linked clinic CRM.
-Production deployment still requires authentication, role-based access,
-encrypted hosted persistence, background jobs, backups and hardened live
-integrations.
+This build is the local/single-clinic pilot version. Before a wider
+rollout, it still needs: authentication beyond a single shared
+`APP_PASSWORD`, role-based access, multi-tenant data isolation, and
+hardened production monitoring. See `CLAUDE.md` in the repo root for the
+full product vision and the gaps between it and the current code.
