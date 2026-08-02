@@ -147,6 +147,8 @@ JARVIS_SECONDARY_PAGES = [
 
 def show_dashboard() -> None:
     company = load_company()
+    if st.session_state.pop("show_onboarding_complete_toast", False):
+        st.toast("Clinic Configured — LeadLens is now managing your clinic.", icon="✅")
     if "workspace_mode" not in st.session_state:
         # A forced theme reload (see ui/workspace_theme._force_streamlit_theme)
         # does a real browser navigation, which starts a brand-new session —
