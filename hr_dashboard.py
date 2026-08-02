@@ -1,1 +1,0 @@
-from ui.hr.dashboard import show_hr_dashboard
