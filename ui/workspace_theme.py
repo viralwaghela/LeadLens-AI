@@ -79,31 +79,63 @@ def apply_workspace_theme(mode: str) -> None:
         [data-testid="stHorizontalBlock"]{align-items:flex-start}
         .stChatMessage{border-radius:14px;padding:.35rem .65rem}
 
-        /* Approved CRM / JARVIS mode switch — built on real buttons. Scoped to
-           the stVerticalBlock carrying our own .workspace-mode-anchor marker:
-           newer Streamlit renders border=True containers directly on
-           stVerticalBlock (inline border style) instead of the separate
-           stVerticalBlockBorderWrapper div older versions used, and
-           stVerticalBlock alone isn't a safe hook since every container
-           (bordered or not) has that testid. :has(.workspace-mode-anchor)
-           on its own isn't safe either — :has() matches ANY ancestor, so it
-           also matched the unbordered stVerticalBlock one level further out
-           that happens to contain this one, applying the pill/grid layout to
-           the wrong (much wider) box and wrapping the button text. Requiring
-           a DIRECT child stElementContainer pins this to just the innermost
-           block that actually wraps the marker. */
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){padding:.7rem .72rem .6rem;margin:.25rem 0 .85rem;overflow:visible;position:relative}
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:3px;border-radius:999px;position:relative}
-        /* stColumn ships its own flex-basis:calc(50% - 16px) for Streamlit's
-           default flex column layout; that's inert once the parent above is
-           grid, but grid still sizes an auto-width item to its content
-           instead of stretching it to fill the track, so "JARVIS" wraps
-           without an explicit width here. */
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stColumn"]{width:100%;min-width:0}
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"]{width:100%}
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"] button{width:100%;border:none;background:transparent;box-shadow:none;border-radius:999px;padding:.62rem .4rem;margin:0;cursor:pointer;transition:all .28s ease;font-size:.76rem;font-weight:850;letter-spacing:.04em}
-        .workspace-switch-caption{text-align:center;font-size:.64rem;margin-top:.5rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
-        .workspace-switch-title{text-align:center;font-size:.62rem;font-weight:850;letter-spacing:.14em;margin-bottom:.42rem;text-transform:uppercase}
+        /* The Core — single JARVIS/CRM toggle (see CORE_SWITCH_SPEC.md).
+           Dormant in CRM, ignited in JARVIS; clicking toggles. A real
+           st.button sits invisibly on top of the custom .ll-core rig,
+           because raw HTML in st.markdown cannot trigger a Streamlit rerun
+           on its own — the actual click target has to be a genuine
+           Streamlit widget. Scoped to the stVerticalBlock carrying our own
+           .ll-core-anchor marker: :has(.ll-core-anchor) alone would also
+           match the unrelated outer vertical block one level further out,
+           since :has() matches ANY ancestor, not just the nearest one (this
+           is what silently broke the old pill switch's active-state glow —
+           see git history). Requiring a DIRECT child stElementContainer
+           pins this to just the innermost block that wraps the marker. */
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor){
+            position:relative;display:flex;justify-content:center;
+            padding:.7rem 0 .6rem;margin:.25rem 0 .85rem;
+        }
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor) [data-testid="stButton"]{
+            position:absolute;inset:0;margin:0;z-index:2;
+        }
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor) [data-testid="stButton"] button{
+            width:100%;height:100%;padding:0;margin:0;border:none;background:transparent;
+            box-shadow:none;opacity:0;cursor:pointer;
+        }
+        /* Real keyboard focus lands on the invisible button (opacity, unlike
+           visibility:hidden, keeps it in the accessibility tree and
+           tabbable) — its own focus outline would be invisible too since
+           opacity hides everything painted on that layer, so the visible
+           focus ring is drawn on the rig instead via :focus-within. */
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor):focus-within .ll-core-rig{
+            outline:2px solid #6E9BFF;outline-offset:5px;border-radius:50%;
+        }
+
+        /* Reference implementation from CORE_SWITCH_SPEC.md — already
+           verified working in-browser; values used exactly as given. */
+        .ll-core{display:flex;flex-direction:column;align-items:center;gap:15px;cursor:pointer;user-select:none;padding:6px 0}
+        .ll-core-rig{position:relative;width:74px;height:74px;display:grid;place-items:center}
+        .ll-ring{position:absolute;inset:0;border-radius:50%;border:1px solid #23324F;transition:.5s}
+        .ll-ring:nth-child(2){inset:9px;border-color:#1D2A44}
+        .ll-seg{position:absolute;inset:15px;border-radius:50%;border:2px dashed #2A3B5C;animation:ll-spin 15s linear infinite;transition:border-color .5s}
+        @keyframes ll-spin{to{transform:rotate(360deg)}}
+        .ll-well{position:absolute;inset:24px;border-radius:50%;background:#1A2740;box-shadow:inset 0 0 8px #0A0F1C;transition:.5s}
+        .ll-lit{position:absolute;inset:31px;border-radius:50%;background:#2C3E60;transition:.5s}
+        .ll-core-label{font-size:10.5px;font-weight:750;letter-spacing:.16em;color:#4E5D75;transition:.4s}
+        .ll-core-sub{font-size:10px;color:#3C4A63;margin-top:-9px}
+
+        /* ignited */
+        .ll-core[data-state="on"] .ll-ring{border-color:#3D6FD0;box-shadow:0 0 18px rgba(61,111,208,.32)}
+        .ll-core[data-state="on"] .ll-ring:nth-child(2){border-color:#5B87E0}
+        .ll-core[data-state="on"] .ll-seg{border-color:#6E9BFF;animation-duration:5s}
+        .ll-core[data-state="on"] .ll-well{background:#17325E;box-shadow:inset 0 0 12px #0A1830,0 0 22px rgba(110,155,255,.4)}
+        .ll-core[data-state="on"] .ll-lit{background:#9CC0FF;box-shadow:0 0 20px #6E9BFF,0 0 44px rgba(110,155,255,.62)}
+        .ll-core[data-state="on"] .ll-core-label{color:#B9D0FF;letter-spacing:.2em}
+
+        @media (prefers-reduced-motion: reduce){
+            .ll-seg{animation:none}
+            .ll-ring,.ll-well,.ll-lit,.ll-core-label{transition:none}
+        }
 
         /* CRM */
         .stApp:has(.crm-mode-marker){background:#f7f9fc;color:var(--crm-ink)}
@@ -111,11 +143,6 @@ def apply_workspace_theme(mode: str) -> None:
         .stApp:has(.crm-mode-marker) [data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--crm-line)}
         .stApp:has(.crm-mode-marker) .eyebrow{color:var(--crm-blue)}
         .stApp:has(.crm-mode-marker) [data-testid="stMetric"],.stApp:has(.crm-mode-marker) .stChatMessage,.stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]{background:#fff;border:1px solid var(--crm-line);box-shadow:0 5px 20px rgba(16,24,40,.035)}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){background:#fff;border:1px solid #cddcf2;box-shadow:0 10px 30px rgba(22,103,232,.08)}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#edf3fc;border:1px solid #bad0ef}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stButton"] button{color:#5e6d82}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(1) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#fff 0 8%,#bfe0ff 12% 30%,#1769e8 34% 62%,#0d4fc0 66%);color:#fff;box-shadow:0 4px 14px rgba(23,105,232,.30)}
-        .stApp:has(.crm-mode-marker) .workspace-switch-title,.stApp:has(.crm-mode-marker) .workspace-switch-caption{color:#5e6d82}
         .crm-hero{padding:1.35rem 1.5rem;border:1px solid var(--crm-line);border-radius:18px;background:linear-gradient(135deg,#fff 0%,#f4f8ff 100%);box-shadow:0 10px 34px rgba(16,24,40,.045);margin-bottom:1rem}
         .crm-hero h1{margin:.12rem 0 .3rem;font-size:2rem}.crm-hero p{margin:0;color:var(--crm-muted)}
         .crm-section-title{font-size:1rem;font-weight:800;color:#172033;margin:.25rem 0 .75rem}
@@ -131,15 +158,10 @@ def apply_workspace_theme(mode: str) -> None:
         .stApp:has(.jarvis-mode-marker) [data-testid="stSidebar"]{background:radial-gradient(circle at 50% 0%,rgba(0,125,255,.13),transparent 28%),linear-gradient(180deg,#020814,#041226);border-right:1px solid var(--jarvis-line)}
         .stApp:has(.jarvis-mode-marker) [data-testid="stSidebar"] *,.stApp:has(.jarvis-mode-marker) h1,.stApp:has(.jarvis-mode-marker) h2,.stApp:has(.jarvis-mode-marker) h3,.stApp:has(.jarvis-mode-marker) p,.stApp:has(.jarvis-mode-marker) label{color:var(--jarvis-text)}
         .stApp:has(.jarvis-mode-marker) .eyebrow{color:var(--jarvis-cyan)}
-        .stApp:has(.jarvis-mode-marker) [data-testid="stMetric"],.stApp:has(.jarvis-mode-marker) .stChatMessage,.stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:not(:has(.workspace-mode-anchor)){background:linear-gradient(145deg,rgba(5,17,32,.97),rgba(7,29,52,.88));border:1px solid var(--jarvis-line);box-shadow:inset 0 0 32px rgba(0,125,255,.035)}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stMetric"],.stApp:has(.jarvis-mode-marker) .stChatMessage,.stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]{background:linear-gradient(145deg,rgba(5,17,32,.97),rgba(7,29,52,.88));border:1px solid var(--jarvis-line);box-shadow:inset 0 0 32px rgba(0,125,255,.035)}
         .stApp:has(.jarvis-mode-marker) [data-testid="stMetricLabel"],.stApp:has(.jarvis-mode-marker) [data-testid="stMetricValue"],.stApp:has(.jarvis-mode-marker) [data-testid="stMetricDelta"],.stApp:has(.jarvis-mode-marker) [data-testid="stCaptionContainer"]{color:#d5edff}
         .stApp:has(.jarvis-mode-marker) input,.stApp:has(.jarvis-mode-marker) textarea,.stApp:has(.jarvis-mode-marker) [data-baseweb="select"]>div{background:#06172b!important;color:#eaf7ff!important;border-color:rgba(52,173,255,.30)!important}
         .stApp:has(.jarvis-mode-marker) .stButton>button,.stApp:has(.jarvis-mode-marker) .stDownloadButton>button{color:#e3f8ff;background:linear-gradient(135deg,#071f3b,#0a3159);border:1px solid rgba(48,174,255,.40)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){background:rgba(2,12,26,.98);border:1px solid rgba(30,144,255,.48);box-shadow:0 0 34px rgba(0,128,255,.18)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#041326;border:1px solid rgba(30,144,255,.34);box-shadow:inset 0 0 18px rgba(0,128,255,.10)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stButton"] button{color:#7fa9c8}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(2) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#dffcff 0 5%,#23d6ff 7% 14%,#087df5 18% 38%,#03152d 42% 55%,#0a8cff 58% 61%,#06162a 64%);color:#7fe9ff;box-shadow:0 0 12px #138cff,0 0 30px rgba(0,157,255,.62);text-shadow:0 0 12px #20cfff}
-        .stApp:has(.jarvis-mode-marker) .workspace-switch-title,.stApp:has(.jarvis-mode-marker) .workspace-switch-caption{color:#65dfff;text-shadow:0 0 10px rgba(32,207,255,.55)}
         .jarvis-hero{display:grid;grid-template-columns:88px 1fr;align-items:center;gap:1.15rem;padding:1.45rem;border-radius:16px;border:1px solid rgba(31,145,255,.42);background:radial-gradient(circle at 88% 12%,rgba(0,146,255,.20),transparent 34%),linear-gradient(135deg,rgba(3,15,29,.98),rgba(5,34,62,.90));box-shadow:0 24px 80px rgba(0,0,0,.32),inset 0 0 45px rgba(0,132,255,.06);margin-bottom:1rem}
         .jarvis-hero h1{margin:.1rem 0 .25rem;color:#f2fbff}.jarvis-hero p{margin:0;color:#9fc5e1}.jarvis-status{color:#4edfff;font-size:.66rem;font-weight:900;letter-spacing:.17em}
         .jarvis-orb{width:74px;height:74px;border-radius:50%;display:grid;place-items:center;font-size:1.7rem;color:#e5ffff;background:radial-gradient(circle,#efffff 0 5%,#36dcff 7% 13%,#087bf2 16% 34%,#04172f 37% 52%,#0aa8ee 55% 58%,#031020 62%);border:1px solid #49dfff;box-shadow:0 0 18px #058eff,0 0 48px rgba(13,164,255,.55)}
@@ -242,7 +264,7 @@ def apply_workspace_theme(mode: str) -> None:
         .stApp:has(.crm-mode-marker) .jv-sidebar-clinic-name{color:var(--crm-ink)}
         .stApp:has(.crm-mode-marker) .jv-sidebar-clinic-loc{color:var(--crm-muted)}
 
-        [data-testid="stSidebar"] div[role="radiogroup"]:not(:has(.workspace-mode-anchor)) label[data-baseweb="radio"]{border-radius:10px;padding:.5rem .6rem;margin-bottom:.1rem}
+        [data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]{border-radius:10px;padding:.5rem .6rem;margin-bottom:.1rem}
         .stApp:has(.jarvis-mode-marker) [data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:has(input:checked){background:linear-gradient(135deg,rgba(9,132,255,.22),rgba(53,217,255,.12));border:1px solid rgba(52,173,255,.4)}
         .stApp:has(.crm-mode-marker) [data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:has(input:checked){background:#edf3fc;border:1px solid #bad0ef}
 
@@ -260,11 +282,11 @@ def apply_workspace_theme(mode: str) -> None:
            scoping instead of .stApp:has(...) — a plain .stApp selector
            silently never matches them. ---------- */
 
-        /* CRM: force light on every remaining native widget. Button rules
-           deliberately have no !important — the workspace-switch pill
-           buttons (lines above, inside .workspace-mode-anchor) rely on
-           winning this exact conflict via higher selector specificity,
-           and !important here would defeat that regardless of specificity. */
+        /* CRM: force light on every remaining native widget. This also
+           matches the Core's invisible overlay button (it's a real
+           st.button too), but that button is hidden via opacity:0 in its
+           own more specific rule above regardless of what background/color
+           this generic rule assigns it, so no conflict to worry about. */
         .stApp:has(.crm-mode-marker) [data-testid="stFormSubmitButton"]>button,
         .stApp:has(.crm-mode-marker) [data-testid^="stBaseButton"]{color:var(--crm-ink);background:#fff;border:1px solid var(--crm-line)}
         .stApp:has(.crm-mode-marker) [data-testid="stExpander"]{background:#fff!important;border:1px solid var(--crm-line)!important;border-radius:14px}
@@ -294,10 +316,8 @@ def apply_workspace_theme(mode: str) -> None:
         body:has(.crm-mode-marker) [data-baseweb="popover"] *,
         body:has(.crm-mode-marker) [data-testid="stSelectboxVirtualDropdown"] *{color:var(--crm-ink)}
 
-        /* JARVIS: force dark on every remaining native widget. Button rules
-           deliberately have no !important — see the matching CRM comment
-           above; the workspace-switch pill buttons need to keep winning
-           this conflict via specificity. */
+        /* JARVIS: force dark on every remaining native widget — see the
+           matching CRM comment above re: the Core's invisible button. */
         .stApp:has(.jarvis-mode-marker) [data-testid="stFormSubmitButton"]>button,
         .stApp:has(.jarvis-mode-marker) [data-testid^="stBaseButton"]{color:#e3f8ff;background:linear-gradient(135deg,#071f3b,#0a3159);border:1px solid rgba(48,174,255,.40)}
         .stApp:has(.jarvis-mode-marker) [data-testid="stExpander"]{background:linear-gradient(145deg,rgba(5,17,32,.97),rgba(7,29,52,.88))!important;border:1px solid var(--jarvis-line)!important;border-radius:14px}
@@ -331,28 +351,44 @@ def apply_workspace_theme(mode: str) -> None:
 
 
 def render_workspace_switch() -> None:
+    """The Core — see CORE_SWITCH_SPEC.md. A single toggle, not a neutral
+    pair of buttons: dormant in CRM, ignited in JARVIS, since Jarvis is the
+    product and the CRM is the substrate underneath him.
+    """
     current = st.session_state.get("workspace_mode", "CRM")
-    with st.container(border=True):
-        st.markdown('<div class="workspace-mode-anchor"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="workspace-switch-title">Workspace Mode</div>', unsafe_allow_html=True)
-        left, right = st.columns(2, gap="small")
-        with left:
-            if st.button("CRM", key="ws_btn_crm", use_container_width=True):
-                if current != "CRM":
-                    st.session_state["workspace_mode"] = "CRM"
-                    st.query_params["workspace"] = "crm"
-                    st.session_state.pop("crm_page", None)
-                    st.session_state.pop("jarvis_page", None)
-                    st.session_state.pop("jarvis_secondary_page", None)
-                    st.rerun()
-        with right:
-            if st.button("JARVIS", key="ws_btn_jarvis", use_container_width=True):
-                if current != "JARVIS":
-                    st.session_state["workspace_mode"] = "JARVIS"
-                    st.query_params["workspace"] = "jarvis"
-                    st.session_state.pop("crm_page", None)
-                    st.session_state.pop("jarvis_page", None)
-                    st.session_state.pop("jarvis_secondary_page", None)
-                    st.rerun()
-        caption = "CRM online" if current == "CRM" else "Jarvis online"
-        st.markdown(f'<div class="workspace-switch-caption">● &nbsp;{caption}</div>', unsafe_allow_html=True)
+    is_jarvis = current == "JARVIS"
+    state = "on" if is_jarvis else "off"
+    sub_label = "return to records" if is_jarvis else "click to bring online"
+    # The visible "JARVIS" label never changes — only the ring/well/lit
+    # colors and the sub-label do — but the real accessible name has to
+    # describe the ACTION this click performs, since a screen reader
+    # hitting a static "JARVIS" label on every render couldn't otherwise
+    # tell dormant from ignited, or know which way a click would switch it.
+    aria_label = "Switch to Records workspace" if is_jarvis else "Switch to Jarvis workspace"
+
+    with st.container():
+        st.markdown('<div class="ll-core-anchor"></div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="ll-core" data-state="{state}">
+              <div class="ll-core-rig">
+                <div class="ll-ring"></div>
+                <div class="ll-ring"></div>
+                <div class="ll-seg"></div>
+                <div class="ll-well"></div>
+                <div class="ll-lit"></div>
+              </div>
+              <div class="ll-core-label">JARVIS</div>
+              <div class="ll-core-sub">{sub_label}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button(aria_label, key="ll_core_btn"):
+            new_mode = "CRM" if is_jarvis else "JARVIS"
+            st.session_state["workspace_mode"] = new_mode
+            st.query_params["workspace"] = new_mode.lower()
+            st.session_state.pop("crm_page", None)
+            st.session_state.pop("jarvis_page", None)
+            st.session_state.pop("jarvis_secondary_page", None)
+            st.rerun()
