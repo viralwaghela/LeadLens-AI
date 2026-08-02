@@ -149,6 +149,38 @@ def _recent_activity(memory: dict, limit: int = 5) -> list[dict]:
     return rows[:limit]
 
 
+@st.fragment(run_every="30s")
+def _hero_fragment(owner_name: str) -> None:
+    # Isolated as its own fragment so the displayed date/time stay live
+    # on an otherwise-idle tab — without this, datetime.now() below only
+    # ever re-evaluates on a user interaction (any Streamlit rerun trigger),
+    # so a tab left open would keep showing whatever time it was at the
+    # last click. run_every reruns just this fragment on a timer, not the
+    # whole page, so it's cheap even though the rest of Mission Control
+    # (metrics, approvals, activity feed) doesn't need the same treatment.
+    now = datetime.now()
+    hour = now.hour
+    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
+    st.markdown(
+        f'''<div class="jv-hero">
+            <div class="jv-hero-rings"><div class="jv-ring-core"></div></div>
+            <div class="jv-hero-row">
+                <div class="jarvis-orb">✦</div>
+                <div>
+                    <h1>{greeting}, {_esc(owner_name)}.</h1>
+                    <p>I've reviewed your clinic's operations. The business pulse, AI team and approval queue are ready.</p>
+                </div>
+            </div>
+            <div class="jv-hero-chips">
+                <div class="jv-chip">{icon("clipboard", 14)}{now.strftime("%B %d, %Y")}</div>
+                <div class="jv-chip">{icon("bell", 14)}{now.strftime("%I:%M %p")}</div>
+                <div class="jv-hero-ask">{icon("sparkle", 14)}<span>Ask Jarvis anything...</span><span class="jv-mic">{icon("mic", 14)}</span></div>
+            </div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+
 def show_jarvis_mode():
     company = load_company()
     context = build_business_context()
@@ -157,9 +189,6 @@ def show_jarvis_mode():
     snapshot = business_snapshot()
     memory = load_memory()
 
-    now = datetime.now()
-    hour = now.hour
-    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     owner_name = company.get("owner_name") or company.get("founder_name") or "Dr. Aarti"
 
     # ---- Top bar ------------------------------------------------------
@@ -190,24 +219,7 @@ def show_jarvis_mode():
         )
 
     # ---- Hero -----------------------------------------------------------
-    st.markdown(
-        f'''<div class="jv-hero">
-            <div class="jv-hero-rings"><div class="jv-ring-core"></div></div>
-            <div class="jv-hero-row">
-                <div class="jarvis-orb">✦</div>
-                <div>
-                    <h1>{greeting}, {_esc(owner_name)}.</h1>
-                    <p>I've reviewed your clinic's operations. The business pulse, AI team and approval queue are ready.</p>
-                </div>
-            </div>
-            <div class="jv-hero-chips">
-                <div class="jv-chip">{icon("clipboard", 14)}{now.strftime("%B %d, %Y")}</div>
-                <div class="jv-chip">{icon("bell", 14)}{now.strftime("%I:%M %p")}</div>
-                <div class="jv-hero-ask">{icon("sparkle", 14)}<span>Ask Jarvis anything...</span><span class="jv-mic">{icon("mic", 14)}</span></div>
-            </div>
-        </div>''',
-        unsafe_allow_html=True,
-    )
+    _hero_fragment(owner_name)
 
     # ---- Metric row -------------------------------------------------------
     m1, m2, m3, m4 = st.columns(4)
