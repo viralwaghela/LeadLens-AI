@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import streamlit as st
 
 
@@ -7,46 +9,78 @@ def _force_streamlit_theme(desired: str) -> None:
     """Force Streamlit's OWN resolved theme (Settings > Light/Dark/System)
     to `desired` ("Light" or "Dark"), so widgets the CSS below can't reach
     — st.dataframe in particular renders its grid to a <canvas> via
-    glide-data-grid, which reads Streamlit's theme directly in JavaScript
-    and has no CSS hook at all, so no amount of CSS here can restyle it.
+    glide-data-grid, which does NOT read Streamlit's stored theme
+    preference for its own colors; verified in production (2026-08-02)
+    that it tracks the viewer's OS/browser light-dark setting directly,
+    live, independent of anything set here.
 
-    Streamlit persists the active theme in
-    localStorage["stActiveTheme-/-v2"] as a JSON string ('"Light"' /
-    '"Dark"' / '"System"'), read once on load to build the theme every
-    widget (including canvas ones) actually renders with. Setting it and
-    reloading is the only way to make a canvas-rendered widget follow the
-    workspace instead of the viewer's own theme choice — this is why the
-    fix can't be pure CSS despite living in this file.
+    The only mechanism that actually overrides it is Streamlit's own
+    first-class embed theme control: the `embed_options=light_theme` /
+    `dark_theme` query params (only valid together with `embed=true`),
+    which authoritatively fix the resolved theme for every consumer,
+    canvas widgets included. `embed=true` alone would also hide
+    Streamlit's own toolbar/header and remove page padding, so
+    `show_toolbar` and `show_padding` are included to keep the app's
+    normal chrome (Streamlit's embed_options whitelist has no option to
+    hide the sidebar, so nothing here touches sidebar behavior).
 
-    Runs via a real <script> tag: st.markdown(unsafe_allow_html=True)
-    does NOT execute <script> content (browsers never run scripts
-    inserted via innerHTML, which is what that path uses under the
-    hood) — st.iframe() renders a real same-origin iframe, whose
-    scripts do execute and can reach window.parent.localStorage.
+    `embed`/`embed_options` cannot be set via st.query_params — Streamlit
+    explicitly rejects programmatic writes to those two keys — so getting
+    there requires an actual URL navigation, not a Streamlit-internal
+    rerun. Two approaches were tried and rejected before this one:
 
-    The comparison against JSON.stringify(desired) (not the bare string)
-    is what keeps this from becoming an infinite reload loop: Streamlit
-    stores the value JSON-encoded, so comparing against the raw word
-    would never match even right after setting it, and every rerun would
-    reload the page again forever.
+    1. A <script> inside components.html()/st.iframe(), navigating
+       window.parent.location. Streamlit's own iframe for both of these
+       is sandboxed WITHOUT `allow-top-navigation` (verified via the
+       rendered iframe's `sandbox` attribute) — location.reload() still
+       worked (it doesn't count as cross-document navigation), but
+       assigning a new location.search silently did nothing, no console
+       error, because changing the *target* URL is exactly what that
+       sandbox flag exists to block.
+    2. st.link_button, whose rendered <a> lives in the real top document
+       (unsandboxed) — but it opens the URL in a new tab with no way to
+       target the current one, which would pile up tabs on every switch.
+
+    This renders a plain <meta http-equiv="refresh"> tag via
+    st.markdown(unsafe_allow_html=True) instead. That HTML lands directly
+    in the top-level document (not a nested iframe), and — verified
+    directly — a browser still executes a meta-refresh even when it's
+    inserted into the page after the fact via innerHTML, unlike <script>
+    content. The "is this already correct" comparison happens here in
+    Python against st.query_params, before deciding whether to render the
+    tag at all, which is what keeps this from becoming a reload loop.
     """
-    st.iframe(
-        f"""
-        <script>
-        (function() {{
-            const desired = {desired!r};
-            const key = "stActiveTheme-/-v2";
-            const desiredStored = JSON.stringify(desired);
-            const current = window.parent.localStorage.getItem(key);
-            if (current !== desiredStored) {{
-                window.parent.localStorage.setItem(key, desiredStored);
-                window.parent.location.reload();
-            }}
-        }})();
-        </script>
-        """,
-        height=1,
-        width=1,
+    embed_theme = "dark_theme" if desired == "Dark" else "light_theme"
+    workspace_value = "jarvis" if desired == "Dark" else "crm"
+
+    # st.query_params cannot read back "embed" or "embed_options" — Streamlit
+    # deliberately filters both out of every read path (get, get_all, items),
+    # even though they can still be set via a real URL navigation. Checking
+    # already_correct against those two directly always sees them as absent
+    # and reloads forever. "_theme" is an ordinary, non-reserved param that
+    # rides along in the same URL and IS readable, so it stands in as the
+    # signal for "has this redirect already happened."
+    params = st.query_params
+    already_correct = (
+        params.get("_theme") == embed_theme
+        and params.get("workspace", "").lower() == workspace_value
+    )
+    if already_correct:
+        return
+
+    target = "?" + urlencode(
+        [
+            ("workspace", workspace_value),
+            ("_theme", embed_theme),
+            ("embed", "true"),
+            ("embed_options", "show_toolbar"),
+            ("embed_options", "show_padding"),
+            ("embed_options", embed_theme),
+        ]
+    )
+    st.markdown(
+        f'<meta http-equiv="refresh" content="0; url={target}">',
+        unsafe_allow_html=True,
     )
 
 
