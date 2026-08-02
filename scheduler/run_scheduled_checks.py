@@ -411,6 +411,53 @@ def revenue_monitoring() -> CheckResult:
     )
 
 
+@check
+def monthly_business_review() -> CheckResult:
+    """Tier 1: a periodic digest of clinic health for the owner — not an
+    alert about anything being wrong. Fires once per calendar month
+    (deduped by year-month), not every run.
+
+    Uses type="Info" rather than "Risk" since this is a routine summary.
+    Note: only reports with type="Risk" currently surface anywhere in the
+    UI (the Mission Control alert banner — see ui/jarvis_mode.py's
+    get_jarvis_alerts(), which only counts type=="Risk"). An "Info"
+    report like this one is durably recorded but not yet visible in the
+    UI. That's a real, pre-existing gap (the same one that leaves
+    core/notifications.py's "Notification" type and
+    ui/notification_center.py disconnected) — flagging it rather than
+    mislabeling this as a "Risk" just to force visibility."""
+    from datetime import date
+
+    from services.clinic_data_service import clinic_metrics
+
+    today = date.today()
+    metrics = clinic_metrics()
+
+    message = (
+        f"Active patients: {metrics['active_patients']}/{metrics['patients']}. "
+        f"Upcoming appointments: {metrics['upcoming_appointments']}. "
+        f"Package renewals due: {metrics['renewals_due']}. "
+        f"Revenue collected: ₹{metrics['payments_total']:,.0f}. "
+        f"Pending payments: {metrics['pending_payments']}. "
+        f"Active therapists: {metrics['therapists']}. "
+        f"At-risk patients: {metrics['at_risk_patients']}."
+    )
+
+    raised = raise_owner_alert(
+        "monthly_business_review",
+        today.strftime("%Y-%m"),
+        title=f"Monthly business review — {today.strftime('%B %Y')}",
+        message=message,
+        department="Executive",
+        level="Info",
+    )
+    return CheckResult(
+        alerts_raised=1 if raised else 0,
+        skipped_duplicate=0 if raised else 1,
+        detail=message,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
