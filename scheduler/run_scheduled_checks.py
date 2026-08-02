@@ -458,6 +458,93 @@ def monthly_business_review() -> CheckResult:
     )
 
 
+LEAD_STALE_DAYS = 3
+LEAD_CLOSED_STATUSES = {"converted", "won", "lost", "declined", "closed", "archived"}
+LEAD_DATE_FIELDS = ("created_at", "inquiry_date", "date", "created", "timestamp")
+
+
+@check
+def lead_qualification_alert() -> CheckResult:
+    """Tier 1: surfaces leads that look like they need review or
+    follow-up — never scores or contacts a lead automatically, just
+    flags what the owner should look at.
+
+    No lead schema is established yet in this codebase
+    (data/pilot/leads.json is currently empty; the only field referenced
+    anywhere else, services/jarvis_context.py, is a generic "status").
+    This check is written defensively against that uncertainty: it
+    treats a lead as "open" unless its status matches a small set of
+    terminal-looking values (LEAD_CLOSED_STATUSES), and looks for a
+    creation/inquiry date under a few plausible field names
+    (LEAD_DATE_FIELDS) to flag ones that have gone stale — if none of
+    those fields are present on a lead, it's still counted as open but
+    not scored for staleness. Revisit once a real lead schema exists.
+
+    Fires at most once per calendar day while open/stale leads exist."""
+    from datetime import date, datetime
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    leads = list_records("leads")
+
+    open_leads = [
+        row for row in leads
+        if str(row.get("status", "")).strip().casefold() not in LEAD_CLOSED_STATUSES
+    ]
+
+    if not open_leads:
+        return CheckResult(detail="no open leads")
+
+    missing_contact = [
+        row for row in open_leads
+        if not (row.get("phone") or row.get("email") or row.get("contact"))
+    ]
+
+    stale = []
+    for row in open_leads:
+        raw_date = next((row.get(field) for field in LEAD_DATE_FIELDS if row.get(field)), None)
+        if not raw_date:
+            continue
+        try:
+            lead_date = datetime.fromisoformat(str(raw_date)[:10]).date()
+        except ValueError:
+            continue
+        if (today - lead_date).days >= LEAD_STALE_DAYS:
+            stale.append(row)
+
+    detail = (
+        f"{len(open_leads)} open lead(s), {len(stale)} stale "
+        f"({LEAD_STALE_DAYS}+ days), {len(missing_contact)} missing contact info"
+    )
+
+    if not stale and not missing_contact:
+        return CheckResult(detail=detail)
+
+    message_parts = []
+    if stale:
+        message_parts.append(
+            f"{len(stale)} open lead(s) haven't been followed up in {LEAD_STALE_DAYS}+ days."
+        )
+    if missing_contact:
+        message_parts.append(
+            f"{len(missing_contact)} open lead(s) have no phone or email on record."
+        )
+
+    raised = raise_owner_alert(
+        "lead_qualification_alert",
+        today.isoformat(),
+        title=f"{len(open_leads)} lead(s) need review",
+        message=" ".join(message_parts),
+        department="Sales",
+    )
+    return CheckResult(
+        alerts_raised=1 if raised else 0,
+        skipped_duplicate=0 if raised else 1,
+        detail=detail,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
