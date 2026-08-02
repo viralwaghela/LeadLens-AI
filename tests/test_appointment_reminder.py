@@ -2,8 +2,8 @@
 
 Patient-facing — must go through the Approval Queue
 (services.integration_manager_v21), never send directly. Runs entirely
-against temporary local stores, never the real database, real
-data/pilot/*.json files, or real execution queue.
+against a temporary local store, never the real database or real
+execution queue.
 """
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ def _appointment(appointment_id, patient_id, when: datetime, status="Scheduled")
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_base = clinic_data.BASE
     original_queue = manager.QUEUE
     original_checks = list(scheduler.CHECKS)
 
@@ -41,7 +40,6 @@ def run_tests() -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            clinic_data.BASE = root / "pilot"
             manager.QUEUE = root / "execution_queue.json"
 
             scheduler.CHECKS.clear()
@@ -95,7 +93,6 @@ def run_tests() -> None:
 
             # --- unparseable appointment_time: skipped, not crashed -------
             business_memory.DATABASE_FOLDER = root / "database2"
-            clinic_data.BASE = root / "pilot2"
             manager.QUEUE = root / "execution_queue2.json"
             clinic_data.add_record("patients", {
                 "patient_id": "P-001", "name": "Test", "phone": "919999999999", "consent_to_contact": True,
@@ -109,7 +106,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        clinic_data.BASE = original_base
         manager.QUEUE = original_queue
         scheduler.CHECKS.clear()
         scheduler.CHECKS.extend(original_checks)

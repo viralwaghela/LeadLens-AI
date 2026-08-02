@@ -469,9 +469,9 @@ def lead_qualification_alert() -> CheckResult:
     follow-up — never scores or contacts a lead automatically, just
     flags what the owner should look at.
 
-    No lead schema is established yet in this codebase
-    (data/pilot/leads.json is currently empty; the only field referenced
-    anywhere else, services/jarvis_context.py, is a generic "status").
+    No lead schema is established yet in this codebase (the "leads"
+    clinic entity is currently empty; the only field referenced anywhere
+    else, services/jarvis_context.py, is a generic "status").
     This check is written defensively against that uncertainty: it
     treats a lead as "open" unless its status matches a small set of
     terminal-looking values (LEAD_CLOSED_STATUSES), and looks for a

@@ -1,25 +1,29 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any, Iterable
 
+from core.memory import load_memory, update_memory
 
-BASE = Path(__file__).resolve().parents[1] / "data" / "pilot"
-
+# Second element of each tuple is the key this entity lives under in
+# core.memory's business-memory store (SQLite locally, Postgres in
+# production — see core/memory.py) rather than a filename: this used to be
+# a set of local JSON files under data/pilot/, which meant every patient,
+# appointment, etc. a real clinic entered was written only to the
+# container's local disk and silently lost on the next redeploy/restart on
+# any host with an ephemeral filesystem (Streamlit Cloud included). Moved
+# onto the same durable store the rest of the app's data already uses.
 ENTITY_META = {
-    "patients": ("patients.json", "patient_id", "P"),
-    "appointments": ("appointments.json", "appointment_id", "A"),
-    "packages": ("packages.json", "package_id", "PKG"),
-    "payments": ("payments.json", "payment_id", "PAY"),
-    "therapists": ("therapists.json", "therapist_id", "T"),
-    "progress_notes": ("progress_notes.json", "progress_id", "PRG"),
-    "leads": ("leads.json", "lead_id", "L"),
-    "corporate_clients": ("corporate_clients.json", "client_id", "C"),
+    "patients": ("clinic_patients", "patient_id", "P"),
+    "appointments": ("clinic_appointments", "appointment_id", "A"),
+    "packages": ("clinic_packages", "package_id", "PKG"),
+    "payments": ("clinic_payments", "payment_id", "PAY"),
+    "therapists": ("clinic_therapists", "therapist_id", "T"),
+    "progress_notes": ("clinic_progress_notes", "progress_id", "PRG"),
+    "leads": ("clinic_leads", "lead_id", "L"),
+    "corporate_clients": ("clinic_corporate_clients", "client_id", "C"),
 }
-FILES = {name: values[0] for name, values in ENTITY_META.items()}
 
 PATIENT_STATUSES = {"Active", "Inactive", "Renewal Due", "Archived"}
 APPOINTMENT_STATUSES = {
@@ -38,23 +42,16 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _path(entity: str) -> Path:
+def _memory_key(entity: str) -> str:
     if entity not in ENTITY_META:
         raise ValueError(f"Unsupported entity: {entity}")
-    BASE.mkdir(parents=True, exist_ok=True)
-    return BASE / ENTITY_META[entity][0]
+    return ENTITY_META[entity][0]
 
 
 def _read_rows(entity: str) -> list[dict[str, Any]]:
-    path = _path(entity)
-    if not path.exists():
-        path.write_text("[]", encoding="utf-8")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8") or "[]")
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"{path.name} contains invalid JSON.") from error
+    value = load_memory().get(_memory_key(entity), [])
     if not isinstance(value, list):
-        raise RuntimeError(f"{path.name} must contain a JSON array.")
+        raise RuntimeError(f"{_memory_key(entity)} must contain a list.")
     return [row for row in value if isinstance(row, dict)]
 
 
@@ -75,10 +72,13 @@ def list_records(
 
 
 def save_records(entity: str, rows: Iterable[dict[str, Any]]) -> None:
-    _path(entity).write_text(
-        json.dumps(list(rows), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    key = _memory_key(entity)
+    rows_list = list(rows)
+
+    def mutate(memory: dict[str, Any]) -> None:
+        memory[key] = rows_list
+
+    update_memory(mutate)
 
 
 def _next_id(entity: str, rows: list[dict[str, Any]]) -> str:

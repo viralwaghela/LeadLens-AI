@@ -1,7 +1,6 @@
 """Regression test for Phase 1's third automation: revenue_monitoring.
 
-Runs entirely against a temporary local store and a temporary clinic-data
-directory, never the real database or the real data/pilot/*.json files.
+Runs entirely against a temporary local store, never the real database.
 """
 from __future__ import annotations
 
@@ -42,14 +41,12 @@ def _payment(payment_id, patient_id, amount, payment_date, status="Paid"):
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_base = clinic_data.BASE
     original_checks = list(scheduler.CHECKS)
 
     try:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            clinic_data.BASE = root / "pilot"
 
             scheduler.CHECKS.clear()
             scheduler.CHECKS.append(scheduler.revenue_monitoring)
@@ -83,7 +80,6 @@ def run_tests() -> None:
 
             # --- healthy pace: no alert ----------------------------------------
             business_memory.DATABASE_FOLDER = root / "database2"
-            clinic_data.BASE = root / "pilot2"
             clinic_data.add_record("patients", {"patient_id": "P-001", "name": "Sample"})
             clinic_data.save_records("payments", [
                 _payment("PAY-001", "P-001", 1000, last_month_checkpoint),
@@ -100,7 +96,6 @@ def run_tests() -> None:
 
             # --- no prior-month baseline: skip, don't crash --------------------
             business_memory.DATABASE_FOLDER = root / "database3"
-            clinic_data.BASE = root / "pilot3"
             clinic_data.add_record("patients", {"patient_id": "P-001", "name": "Sample"})
             clinic_data.save_records("payments", [_payment("PAY-001", "P-001", 300, today)])
             result_no_baseline = scheduler.revenue_monitoring()
@@ -109,7 +104,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        clinic_data.BASE = original_base
         scheduler.CHECKS.clear()
         scheduler.CHECKS.extend(original_checks)
 

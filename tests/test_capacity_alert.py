@@ -1,7 +1,6 @@
 """Regression test for Phase 1's second automation: capacity_alert.
 
-Runs entirely against a temporary local store and a temporary clinic-data
-directory, never the real database or the real data/pilot/*.json files.
+Runs entirely against a temporary local store, never the real database.
 """
 from __future__ import annotations
 
@@ -23,14 +22,12 @@ def _seed(therapists, appointments):
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_base = clinic_data.BASE
     original_checks = list(scheduler.CHECKS)
 
     try:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            clinic_data.BASE = root / "pilot"
 
             scheduler.CHECKS.clear()
             scheduler.CHECKS.append(scheduler.capacity_alert)
@@ -108,7 +105,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        clinic_data.BASE = original_base
         scheduler.CHECKS.clear()
         scheduler.CHECKS.extend(original_checks)
 

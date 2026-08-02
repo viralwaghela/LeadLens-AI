@@ -79,6 +79,17 @@ DEFAULT_MEMORY = {
     "operations": [],
     "kpis": [],
     "approvals": [],
+    # Clinic CRM entities (services/clinic_data_service.py). Prefixed to
+    # avoid any collision with the generic "clients"/"employees" keys
+    # above, which mean something different (company-profile fields).
+    "clinic_patients": [],
+    "clinic_appointments": [],
+    "clinic_packages": [],
+    "clinic_payments": [],
+    "clinic_therapists": [],
+    "clinic_progress_notes": [],
+    "clinic_leads": [],
+    "clinic_corporate_clients": [],
 }
 
 
