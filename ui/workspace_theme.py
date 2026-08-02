@@ -4,6 +4,8 @@ from urllib.parse import urlencode
 
 import streamlit as st
 
+from core.auth import reload_token
+
 
 def _force_streamlit_theme(desired: str) -> None:
     """Force Streamlit's OWN resolved theme (Settings > Light/Dark/System)
@@ -49,6 +51,13 @@ def _force_streamlit_theme(desired: str) -> None:
     content. The "is this already correct" comparison happens here in
     Python against st.query_params, before deciding whether to render the
     tag at all, which is what keeps this from becoming a reload loop.
+
+    Because this is a genuine browser navigation and not a Streamlit
+    rerun, it starts a brand-new session — st.session_state, including
+    core.auth's login flag, doesn't survive it. Carrying reload_token()
+    through the same URL lets require_login() recognize "this session
+    already passed the password check a moment ago" without storing
+    anything a viewer could forge from the client side (see core/auth.py).
     """
     embed_theme = "dark_theme" if desired == "Dark" else "light_theme"
     workspace_value = "jarvis" if desired == "Dark" else "crm"
@@ -72,6 +81,7 @@ def _force_streamlit_theme(desired: str) -> None:
         [
             ("workspace", workspace_value),
             ("_theme", embed_theme),
+            ("_auth", reload_token()),
             ("embed", "true"),
             ("embed_options", "show_toolbar"),
             ("embed_options", "show_padding"),

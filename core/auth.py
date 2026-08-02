@@ -13,16 +13,61 @@ accidentally-unprotected deployment is hard to miss.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
+import time
 
 import streamlit as st
 
 SESSION_KEY = "app_authenticated"
 
+# How long a reload_token() stays valid, in seconds. Only needs to cover the
+# round-trip of a single browser navigation (see workspace_theme.py's
+# meta-refresh reload) — kept short so a copy-pasted URL containing a token
+# can't be used to skip the password screen for long.
+_RELOAD_TOKEN_TTL_SECONDS = 20
+
 
 def _configured_password() -> str:
     return os.getenv("APP_PASSWORD", "").strip()
+
+
+def _sign(payload: str) -> str:
+    # Reuses APP_PASSWORD as the HMAC key rather than adding a second secret
+    # to configure — this token only ever proves "already passed the
+    # APP_PASSWORD check a moment ago," so it doesn't need independent
+    # keying, and rotates automatically whenever the password does.
+    return hmac.new(
+        _configured_password().encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()[:16]
+
+
+def reload_token() -> str:
+    """A short-lived, signed proof that this session already passed
+    require_login(), for carrying auth across the forced full-page reloads
+    the Core switch's theme-forcing triggers (see workspace_theme.py) —
+    those are genuine browser navigations, not Streamlit reruns, so
+    st.session_state doesn't survive them and login would otherwise be
+    required again on every workspace switch. Only call this after
+    require_login() has already returned True this session.
+    """
+    ts = str(int(time.time()))
+    return f"{ts}.{_sign(ts)}"
+
+
+def _reload_token_is_valid(token: str) -> bool:
+    try:
+        ts, sig = token.split(".", 1)
+    except ValueError:
+        return False
+    if not hmac.compare_digest(sig, _sign(ts)):
+        return False
+    try:
+        age = time.time() - int(ts)
+    except ValueError:
+        return False
+    return 0 <= age < _RELOAD_TOKEN_TTL_SECONDS
 
 
 def require_login() -> bool:
@@ -44,6 +89,11 @@ def require_login() -> bool:
         return True
 
     if st.session_state.get(SESSION_KEY):
+        return True
+
+    token = st.query_params.get("_auth", "")
+    if token and _reload_token_is_valid(token):
+        st.session_state[SESSION_KEY] = True
         return True
 
     st.markdown(
