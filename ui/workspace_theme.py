@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 def _force_streamlit_theme(desired: str) -> None:
@@ -22,7 +21,7 @@ def _force_streamlit_theme(desired: str) -> None:
     Runs via a real <script> tag: st.markdown(unsafe_allow_html=True)
     does NOT execute <script> content (browsers never run scripts
     inserted via innerHTML, which is what that path uses under the
-    hood) — components.html() renders a real same-origin iframe, whose
+    hood) — st.iframe() renders a real same-origin iframe, whose
     scripts do execute and can reach window.parent.localStorage.
 
     The comparison against JSON.stringify(desired) (not the bare string)
@@ -31,7 +30,7 @@ def _force_streamlit_theme(desired: str) -> None:
     would never match even right after setting it, and every rerun would
     reload the page again forever.
     """
-    components.html(
+    st.iframe(
         f"""
         <script>
         (function() {{
@@ -46,8 +45,8 @@ def _force_streamlit_theme(desired: str) -> None:
         }})();
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 
@@ -84,21 +83,43 @@ def apply_workspace_theme(mode: str) -> None:
            st.button sits invisibly on top of the custom .ll-core rig,
            because raw HTML in st.markdown cannot trigger a Streamlit rerun
            on its own — the actual click target has to be a genuine
-           Streamlit widget. Scoped to the stVerticalBlock carrying our own
-           .ll-core-anchor marker: :has(.ll-core-anchor) alone would also
-           match the unrelated outer vertical block one level further out,
-           since :has() matches ANY ancestor, not just the nearest one (this
-           is what silently broke the old pill switch's active-state glow —
-           see git history). Requiring a DIRECT child stElementContainer
-           pins this to just the innermost block that wraps the marker. */
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor){
-            position:relative;display:flex;justify-content:center;
+           Streamlit widget. Scoped via st.container(key=...)'s official
+           st-key-* class (applied directly to that container's own wrapper
+           element by Streamlit itself) rather than a :has() selector
+           guessing at internal data-testid DOM nesting.
+
+           Overlaid with CSS Grid stacking (both direct children placed in
+           grid cell 1/1) rather than position:absolute + inset:0 — the
+           inset/auto-width stretch approach measurably failed to size the
+           button to its container in testing (verified via
+           getBoundingClientRect: it collapsed to a tiny intrinsic size
+           instead of filling the cell, for reasons that didn't match the
+           CSS abspos-in-auto-height-flex-container spec on paper — likely
+           an interaction with Streamlit's own .stButton width:100% rule
+           that inset-stretch loses to in practice). Grid-cell stacking
+           sizes both children to the same definite cell dimensions up
+           front, which plain percentage sizing (width:100%;height:100%)
+           can then safely reference — no stretch-vs-explicit-width fight
+           possible. */
+        .st-key-ll_core_switch{
+            display:grid;justify-items:center;
             padding:.7rem 0 .6rem;margin:.25rem 0 .85rem;
         }
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor) [data-testid="stButton"]{
-            position:absolute;inset:0;margin:0;z-index:2;
+        .st-key-ll_core_switch>div{
+            grid-area:1/1;
         }
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor) [data-testid="stButton"] button{
+        /* The button's own wrapping stElementContainer defaults to its
+           natural ~40px button height instead of stretching to the grid
+           row (Streamlit's own element-container styling caps it) —
+           forced explicitly since only THIS child (not the visual one,
+           which must keep sizing the row from its own content) needs it. */
+        .st-key-ll_core_switch>div:has([data-testid="stButton"]){
+            width:100%!important;height:100%!important;
+        }
+        .st-key-ll_core_switch [data-testid="stButton"]{
+            width:100%;height:100%;margin:0;z-index:2;
+        }
+        .st-key-ll_core_switch [data-testid="stButton"] button{
             width:100%;height:100%;padding:0;margin:0;border:none;background:transparent;
             box-shadow:none;opacity:0;cursor:pointer;
         }
@@ -107,7 +128,7 @@ def apply_workspace_theme(mode: str) -> None:
            tabbable) — its own focus outline would be invisible too since
            opacity hides everything painted on that layer, so the visible
            focus ring is drawn on the rig instead via :focus-within. */
-        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .ll-core-anchor):focus-within .ll-core-rig{
+        .st-key-ll_core_switch:focus-within .ll-core-rig{
             outline:2px solid #6E9BFF;outline-offset:5px;border-radius:50%;
         }
 
@@ -366,8 +387,7 @@ def render_workspace_switch() -> None:
     # tell dormant from ignited, or know which way a click would switch it.
     aria_label = "Switch to Records workspace" if is_jarvis else "Switch to Jarvis workspace"
 
-    with st.container():
-        st.markdown('<div class="ll-core-anchor"></div>', unsafe_allow_html=True)
+    with st.container(key="ll_core_switch"):
         st.markdown(
             f"""
             <div class="ll-core" data-state="{state}">
