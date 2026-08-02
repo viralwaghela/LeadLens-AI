@@ -261,6 +261,82 @@ def low_booking_alert() -> CheckResult:
     )
 
 
+CAPACITY_ALERT_LOOKAHEAD_DAYS = 7
+
+
+@check
+def capacity_alert() -> CheckResult:
+    """Tier 1: detection + surfacing only, never auto-fixing (per
+    docs/AUTOMATION_ROADMAP.md) — flags a therapist whose scheduled load
+    for the week ahead exceeds their own weekly_capacity, so the owner
+    decides how to rebalance (reschedule, bring in cover, etc.) rather
+    than Jarvis silently moving patients around.
+
+    Fires at most once per calendar day per over-booked therapist while
+    the situation persists."""
+    from datetime import date, timedelta
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    window = {
+        (today + timedelta(days=offset)).isoformat()
+        for offset in range(CAPACITY_ALERT_LOOKAHEAD_DAYS)
+    }
+
+    booked_by_therapist: dict[str, int] = {}
+    for row in list_records("appointments"):
+        if row.get("status") != "Scheduled" or row.get("appointment_date") not in window:
+            continue
+        therapist_id = row.get("therapist_id")
+        if therapist_id:
+            booked_by_therapist[therapist_id] = booked_by_therapist.get(therapist_id, 0) + 1
+
+    therapist_names = {
+        row.get("therapist_id"): row.get("name") or row.get("therapist_id")
+        for row in list_records("therapists")
+    }
+
+    alerts_raised = 0
+    skipped_duplicate = 0
+    over_capacity_count = 0
+    for row in list_records("therapists"):
+        if row.get("status") != "Active":
+            continue
+        therapist_id = row.get("therapist_id")
+        capacity = int(row.get("weekly_capacity", 0) or 0)
+        if capacity <= 0:
+            continue
+        booked = booked_by_therapist.get(therapist_id, 0)
+        if booked <= capacity:
+            continue
+
+        over_capacity_count += 1
+        name = therapist_names.get(therapist_id, therapist_id)
+        raised = raise_owner_alert(
+            "capacity_alert",
+            f"{therapist_id}:{today.isoformat()}",
+            title=f"{name} is over capacity for the week ahead",
+            message=(
+                f"{name} has {booked} scheduled appointments over the next "
+                f"{CAPACITY_ALERT_LOOKAHEAD_DAYS} days against a weekly "
+                f"capacity of {capacity}."
+            ),
+            department="Operations",
+        )
+        if raised:
+            alerts_raised += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{over_capacity_count} therapist(s) over capacity"
+        if over_capacity_count
+        else "no therapists over capacity"
+    )
+    return CheckResult(alerts_raised=alerts_raised, skipped_duplicate=skipped_duplicate, detail=detail)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
