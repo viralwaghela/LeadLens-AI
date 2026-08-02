@@ -647,6 +647,69 @@ def appointment_reminder() -> CheckResult:
     )
 
 
+@check
+def waiting_list_automation() -> CheckResult:
+    """Tier 1: surfaces a future appointment slot that just opened up via
+    a cancellation, so the owner can offer it to a waitlisted patient.
+
+    There is no waiting_list entity anywhere in
+    services.clinic_data_service, and nothing records who's waiting for
+    what — the roadmap's "Waiting List Automation" can't be built as
+    literally "automatically match a waitlisted patient to an open slot"
+    without a real data model decision first (same situation as Expense
+    Monitoring, already blocked in docs/AUTOMATION_ROADMAP.md for
+    exactly this reason — flagged there rather than inventing a schema
+    here). This is a deliberately scoped-down piece of the idea that
+    doesn't require inventing that entity: it detects a future Scheduled
+    appointment that became Cancelled and tells the owner a slot opened
+    up. Matching it to a specific patient is left to the owner — Jarvis
+    doesn't know who's waiting, only that a slot appeared.
+
+    Fires once per cancelled appointment, ever — not daily; a specific
+    cancellation is a one-time event, not an ongoing situation."""
+    from datetime import date
+
+    from services.clinic_data_service import get_record, list_records
+
+    today = date.today().isoformat()
+    cancelled_future = [
+        row for row in list_records("appointments")
+        if row.get("status") == "Cancelled" and str(row.get("appointment_date", "")) >= today
+    ]
+
+    alerts_raised = 0
+    skipped_duplicate = 0
+    for appointment in cancelled_future:
+        therapist = get_record("therapists", appointment.get("therapist_id"))
+        therapist_name = (
+            therapist.get("name") if therapist else appointment.get("therapist_id", "an unknown therapist")
+        )
+
+        raised = raise_owner_alert(
+            "waiting_list_automation",
+            str(appointment.get("appointment_id")),
+            title="A cancellation opened up an appointment slot",
+            message=(
+                f"{therapist_name} has an open slot on "
+                f"{appointment.get('appointment_date')} at "
+                f"{appointment.get('appointment_time') or 'an unspecified time'} "
+                f"after a cancellation. Consider offering it to a waitlisted patient."
+            ),
+            department="Operations",
+        )
+        if raised:
+            alerts_raised += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{alerts_raised} newly-opened slot(s) flagged, {skipped_duplicate} already flagged"
+        if cancelled_future
+        else "no cancelled future appointments"
+    )
+    return CheckResult(alerts_raised=alerts_raised, skipped_duplicate=skipped_duplicate, detail=detail)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

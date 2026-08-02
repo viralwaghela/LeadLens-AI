@@ -64,6 +64,24 @@ Blocked for now: Expense Monitoring — no expense data entity exists yet in
 `services/clinic_data_service.py`. Needs a data model decision before this
 can be built; flag to the founder rather than inventing a schema alone.
 
+Note on item 7, Waiting List Automation: same situation as Expense
+Monitoring — there's no `waiting_list` entity in
+`services/clinic_data_service.py`, and nothing records who's waiting for
+what. Built anyway, but scoped down to what doesn't require inventing
+that entity: `scheduler.run_scheduled_checks.waiting_list_automation`
+detects a future appointment that got Cancelled and tells the owner a
+slot opened up — it does not maintain an actual waiting list or match a
+specific patient to the slot. A real waiting list (patients register
+interest, Jarvis offers them the slot automatically) needs the same kind
+of data model decision as Expense Monitoring before it can be built.
+
+Note on item 5, Lead Qualification: `data/pilot/leads.json` has no
+established schema (currently empty; only a generic `status` field is
+referenced anywhere else in the app). `lead_qualification_alert` is
+written defensively against that — treats a lead as open unless status
+looks terminal, checks a few plausible date-field names for staleness.
+Revisit once real lead data exists and a schema is actually decided.
+
 ## Phase 2 — Tier 2 automations (patient-facing, tone-sensitive)
 Only start once Phase 1 has been running reliably for at least a
 couple of weeks with no bad surprises. In priority order:
