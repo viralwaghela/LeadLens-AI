@@ -26,7 +26,13 @@
       "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\ddl_ab_test.py\")",
       "Bash(./.venv/Scripts/python.exe _investigate_staleness.py)",
       "Bash(./.venv/Scripts/python.exe _investigate_staleness.py --direct)",
-      "Bash(DATABASE_URL=\"postgresql://fake:fake@example.com:5432/postgres\" PYTHONPATH=. ./.venv/Scripts/python.exe tests/test_low_booking_alert.py)"
+      "Bash(DATABASE_URL=\"postgresql://fake:fake@example.com:5432/postgres\" PYTHONPATH=. ./.venv/Scripts/python.exe tests/test_low_booking_alert.py)",
+      "Bash(git rm *)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python -m py_compile app.py dashboard.py onboarding.py)",
+      "Bash(xargs \"./.venv/Scripts/python.exe\" -m py_compile)",
+      "Bash(.venv/Scripts/python -m pip install pytest -q)",
+      "Bash(.venv/Scripts/python -m pytest tests/ -q)"
     ]
   }
 }
