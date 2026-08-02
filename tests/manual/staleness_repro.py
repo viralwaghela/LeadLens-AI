@@ -1,37 +1,37 @@
-"""Manual reproduction script for the Supabase read-staleness bug found
-on 2026-08-02 while building Phase 1's low_booking_alert check.
+"""Manual verification script written on 2026-08-02 while chasing what
+looked like a Supabase read-staleness bug during Phase 1's
+low_booking_alert work — kept as a general core.memory-vs-raw-Postgres
+consistency check, since the actual investigation is a useful template
+even though the original bug turned out not to exist.
 
-What it reproduces: core.memory.get_memory_section() serving a stale
-read from a fresh process — stuck for minutes at a time in the worst
-observed case, not just a brief lag — while a raw psycopg2 query against
-the exact same DATABASE_URL returns fresh, correct data at the same
-moment. It does this by writing a batch of uniquely-tagged entries in
-one process, then immediately checking both core.memory and a raw
-connection from a separate process, repeated over several rounds.
+The full story: several ad-hoc diagnostic one-liners that day checked
+production state via core.memory without first calling load_dotenv().
+core.memory doesn't auto-load .env (only real app entry points like
+scheduler/run_scheduled_checks.py do), so those checks silently read the
+local SQLite fallback — frozen from early testing — instead of Postgres,
+while raw psycopg2 scripts run alongside them (which did call
+load_dotenv()) correctly showed Postgres's real, current state. The
+mismatch was mistaken for the database serving stale reads. It wasn't:
+every connection showed pg_is_in_recovery() = false and identical
+inet_server_addr() (no read replica involved), and once load_dotenv()
+was added consistently, core.memory reads matched raw Postgres reads
+exactly, every time, including under a real single-connection burst
+test. There was no pooler bug, no DDL-related staleness, and switching
+DATABASE_URL to Supabase's direct connection (see .env.example) fixed
+nothing because nothing there was broken.
 
-Root cause was never fully confirmed — there's no visibility into
-Supabase's Supavisor pooler internals from the client side, and vanilla
-Postgres MVCC under READ COMMITTED with no read replicas (confirmed via
-pg_is_in_recovery()) has no mechanism that should allow this. What *was*
-established:
-  - Not a read-replica issue: every connection showed pg_is_in_recovery()
-    = false and identical inet_server_addr().
-  - Strongly correlated with core.memory._pg_connect()'s pattern of
-    running a no-op DDL statement (CREATE TABLE IF NOT EXISTS / ALTER
-    TABLE ADD COLUMN IF NOT EXISTS) immediately before every real query,
-    combined with going through Supabase's SHARED POOLER hostname
-    (aws-0-<region>.pooler.supabase.com). A raw query with no preceding
-    DDL, against that same pooled URL, was never observed stale.
-  - Never reproduced against Supabase's DIRECT connection
-    (db.<project-ref>.supabase.co) in any test run here. That's why
-    DATABASE_URL was switched to the direct connection string — see
-    .env.example's DATABASE_URL comment and the commit around
-    2026-08-02 for the full writeup.
+What this script actually does, and remains useful for: writes a batch
+of uniquely-tagged entries in one process (via core.memory, with
+load_dotenv() correctly in place), then immediately checks both
+core.memory and a raw psycopg2 connection from a separate process,
+repeated over several rounds — a genuine, mechanical way to confirm the
+two stay consistent, useful after any future change to core.memory's
+connection handling.
 
-When to run this: if stale-looking reads ever resurface (an alert that
-should have deduplicated fires again, a count in the UI looks behind
-reality, etc.), especially after any future change to core.memory's
-connection handling or to DATABASE_URL. It targets whatever
+When to run this: after changing core.memory's connection or locking
+logic, or if a real discrepancy between the app's view and the database
+is ever suspected again — though check for a missing load_dotenv() call
+in whatever's doing the observing first. It targets whatever
 DATABASE_URL currently resolves to via python-dotenv, same as the app
 itself — to test a specific connection string instead of whatever's in
 .env, temporarily override it:

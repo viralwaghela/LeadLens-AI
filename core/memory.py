@@ -279,6 +279,40 @@ def _sqlite_save_versioned(payload: str, expected_version: int) -> bool:
         conn.close()
 
 
+def _sqlite_atomic_update(mutator):
+    """SQLite counterpart to _pg_atomic_update: BEGIN IMMEDIATE acquires
+    the write lock immediately (rather than deferring it until the first
+    write statement), held for the read AND the write within one
+    connection, so nothing else can act on the row in between. See
+    _pg_atomic_update and update_memory() for why this replaced the
+    earlier two-connection optimistic-lock design."""
+    _sqlite_ensure_database()
+    conn = _sqlite_connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT payload, version FROM memory_store WHERE id = 1").fetchone()
+        payload, _version = row
+        memory = _row_to_memory(payload)
+        outcome = mutator(memory)
+        if outcome is NO_CHANGE:
+            conn.execute("ROLLBACK")
+            return memory
+
+        new_payload = json.dumps(memory, ensure_ascii=False)
+        now = datetime.now().isoformat(timespec="seconds")
+        conn.execute(
+            "UPDATE memory_store SET payload = ?, version = version + 1, updated_at = ? WHERE id = 1",
+            (new_payload, now),
+        )
+        conn.execute("COMMIT")
+        return memory
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Postgres backend (Supabase / Neon / any standard Postgres via DATABASE_URL)
 # ---------------------------------------------------------------------------
@@ -412,6 +446,72 @@ def _pg_save_versioned(payload: str, expected_version: int) -> bool:
         conn.close()
 
 
+def _pg_atomic_update(mutator):
+    """Single connection, single transaction: SELECT ... FOR UPDATE holds
+    a row lock for the whole read-modify-write cycle, so no other writer
+    can act on this row until we commit or roll back. The read and the
+    write are consistent with each other by construction, not by hoping
+    a version-mismatch check (see _pg_save_versioned above) catches a
+    conflict after the fact.
+
+    Replaces an earlier two-connection design (one connection to read
+    via _pg_load_versioned, a separate one to write via
+    _pg_save_versioned) coordinated by an optimistic version check. That
+    design was investigated for a suspected stale-read bug that, on
+    closer inspection, turned out to be a testing-methodology artifact
+    (see update_memory()'s docstring) — not a real defect in the
+    two-connection design. This replacement is kept anyway on its own
+    merits: one connection instead of two per write, and a real
+    transactional lock instead of a retry-after-the-fact check."""
+    conn = _pg_connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '10s'")
+            cur.execute("SELECT payload, version FROM memory_store WHERE id = 1 FOR UPDATE")
+            row = cur.fetchone()
+
+        now = datetime.now().isoformat(timespec="seconds")
+
+        if row is None:
+            # Empty database: same migrate-in-existing-data fallback as
+            # _pg_load_versioned, then always insert — there's no version
+            # to check yet and no prior writer to conflict with.
+            payload = _sqlite_load_existing_payload() or _migrate_legacy_json_payload()
+            payload = payload or json.dumps(_fresh_default(), ensure_ascii=False)
+            memory = _row_to_memory(payload)
+            mutator(memory)
+            new_payload = json.dumps(memory, ensure_ascii=False)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO memory_store (id, payload, updated_at, version) VALUES (1, %s, %s, 1)",
+                    (new_payload, now),
+                )
+            conn.commit()
+            return memory
+
+        payload, _version = row
+        memory = _row_to_memory(payload)
+        outcome = mutator(memory)
+        if outcome is NO_CHANGE:
+            conn.rollback()
+            return memory
+
+        new_payload = json.dumps(memory, ensure_ascii=False)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE memory_store SET payload = %s, version = version + 1, updated_at = %s "
+                "WHERE id = 1",
+                (new_payload, now),
+            )
+        conn.commit()
+        return memory
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Backend-agnostic public API (unchanged from before)
 # ---------------------------------------------------------------------------
@@ -489,33 +589,72 @@ NO_CHANGE = object()
 
 
 def update_memory(mutator, max_retries=8):
-    """Atomically read-modify-write the whole memory store.
+    """Atomically read-modify-write the whole memory store, holding a
+    single connection and transaction across both the read and the
+    write (SELECT ... FOR UPDATE on Postgres, BEGIN IMMEDIATE on SQLite —
+    see _pg_atomic_update / _sqlite_atomic_update) so no other writer can
+    act on the row in between. The read and write are consistent with
+    each other by construction, not by detecting a conflict after the
+    fact.
 
     `mutator(memory)` mutates the dict in place; its return value is
     ignored unless it is the NO_CHANGE sentinel, which skips the write
-    entirely (for mutators that may decide there's nothing to do).
-
-    If another process saves in between this function's read and write,
-    the write is rejected and the whole cycle retries against a fresh
-    read — so `mutator` may run more than once and must be safe to re-run
-    (a pure function of whichever memory dict it's handed).
+    entirely (for mutators that may decide there's nothing to do). A
+    second, concurrent caller normally just waits for the row lock
+    rather than needing a retry, but `mutator` should still be written
+    as if it might run more than once (safe to re-run against whatever
+    memory dict it's handed) — that's still true on a genuine lock
+    timeout (see below).
 
     This is how every mutator in this module avoids the lost-update race
     that a bare load_memory() + save_memory() has: two processes reading
     the same row and saving back full copies, where the second save
     silently erases whatever the first one added.
+
+    History: an earlier version of this function used two separate
+    connections — one to read (load_memory_versioned), one to write
+    (save_memory_versioned) — coordinated by an optimistic version
+    check, retrying on a detected mismatch. That design was suspected
+    (2026-08-02) of causing stale reads under the scheduler's real
+    access pattern, based on core.memory reads that looked stuck behind
+    a raw connection's view of the same row. The suspicion turned out to
+    be wrong: those reads were silently hitting the local SQLite
+    fallback, not Postgres, because the diagnostic scripts checking them
+    never called load_dotenv() — a testing-methodology bug, not a defect
+    in the two-connection design, which was correct all along (verified
+    afterward under a forced, deliberately-widened race window with
+    load_dotenv() actually in place). This single-connection version is
+    kept anyway, on its own merits: one connection instead of two per
+    write, and a real transactional lock instead of a retry-after-the-
+    fact check. See docs/AUTOMATION_ROADMAP.md for the full writeup.
+
+    `max_retries` guards against a genuine database-level conflict (a
+    lock-timeout or "database is locked" error), retried with a short
+    backoff — not the expected steady-state path, since a lock wait
+    normally resolves on its own without needing a retry at this level.
     """
+    last_error: Exception | None = None
     for attempt in range(max_retries):
-        memory, version = load_memory_versioned()
-        outcome = mutator(memory)
-        if outcome is NO_CHANGE:
-            return memory
-        if save_memory_versioned(memory, version):
-            return memory
-        time.sleep(0.05 * (attempt + 1))
+        try:
+            if _using_postgres():
+                return _pg_atomic_update(mutator)
+            return _sqlite_atomic_update(mutator)
+        except sqlite3.OperationalError as error:
+            last_error = error
+        except Exception as error:
+            if _using_postgres():
+                import psycopg2
+
+                if isinstance(error, psycopg2.OperationalError):
+                    last_error = error
+                else:
+                    raise
+            else:
+                raise
+        time.sleep(0.2 * (attempt + 1))
     raise ConcurrentUpdateError(
         f"Could not save after {max_retries} attempts — too many concurrent writers."
-    )
+    ) from last_error
 
 
 def generate_id(section):
