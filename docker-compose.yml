@@ -1,0 +1,15 @@
+services:
+  leadlens:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Local SQLite fallback and generated documents survive container
+      # restarts. If DATABASE_URL is set in .env (Postgres), these volumes
+      # are unused for the primary data path but are kept for generated/.
+      - ./database:/app/database
+      - ./data:/app/data
+      - ./generated:/app/generated
+    restart: unless-stopped
