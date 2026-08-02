@@ -147,7 +147,15 @@ JARVIS_SECONDARY_PAGES = [
 
 def show_dashboard() -> None:
     company = load_company()
-    mode = st.session_state.setdefault("workspace_mode", "CRM")
+    if "workspace_mode" not in st.session_state:
+        # A forced theme reload (see ui/workspace_theme._force_streamlit_theme)
+        # does a real browser navigation, which starts a brand-new session —
+        # st.session_state doesn't survive it, only the URL does. Recover the
+        # mode from the query string so the reload doesn't silently bounce
+        # the workspace back to the CRM default.
+        queried = st.query_params.get("workspace", "").upper()
+        st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "CRM"
+    mode = st.session_state["workspace_mode"]
     apply_workspace_theme(mode)
 
     with st.sidebar:

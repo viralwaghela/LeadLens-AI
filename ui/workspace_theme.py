@@ -1,11 +1,60 @@
 from __future__ import annotations
 
 import streamlit as st
+import streamlit.components.v1 as components
+
+
+def _force_streamlit_theme(desired: str) -> None:
+    """Force Streamlit's OWN resolved theme (Settings > Light/Dark/System)
+    to `desired` ("Light" or "Dark"), so widgets the CSS below can't reach
+    — st.dataframe in particular renders its grid to a <canvas> via
+    glide-data-grid, which reads Streamlit's theme directly in JavaScript
+    and has no CSS hook at all, so no amount of CSS here can restyle it.
+
+    Streamlit persists the active theme in
+    localStorage["stActiveTheme-/-v2"] as a JSON string ('"Light"' /
+    '"Dark"' / '"System"'), read once on load to build the theme every
+    widget (including canvas ones) actually renders with. Setting it and
+    reloading is the only way to make a canvas-rendered widget follow the
+    workspace instead of the viewer's own theme choice — this is why the
+    fix can't be pure CSS despite living in this file.
+
+    Runs via a real <script> tag: st.markdown(unsafe_allow_html=True)
+    does NOT execute <script> content (browsers never run scripts
+    inserted via innerHTML, which is what that path uses under the
+    hood) — components.html() renders a real same-origin iframe, whose
+    scripts do execute and can reach window.parent.localStorage.
+
+    The comparison against JSON.stringify(desired) (not the bare string)
+    is what keeps this from becoming an infinite reload loop: Streamlit
+    stores the value JSON-encoded, so comparing against the raw word
+    would never match even right after setting it, and every rerun would
+    reload the page again forever.
+    """
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const desired = {desired!r};
+            const key = "stActiveTheme-/-v2";
+            const desiredStored = JSON.stringify(desired);
+            const current = window.parent.localStorage.getItem(key);
+            if (current !== desiredStored) {{
+                window.parent.localStorage.setItem(key, desiredStored);
+                window.parent.location.reload();
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 def apply_workspace_theme(mode: str) -> None:
     is_jarvis = mode == "JARVIS"
     marker = "jarvis-mode-marker" if is_jarvis else "crm-mode-marker"
+    _force_streamlit_theme("Dark" if is_jarvis else "Light")
     st.markdown(f'<div class="{marker}"></div>', unsafe_allow_html=True)
     st.markdown(
         """
@@ -30,12 +79,29 @@ def apply_workspace_theme(mode: str) -> None:
         [data-testid="stHorizontalBlock"]{align-items:flex-start}
         .stChatMessage{border-radius:14px;padding:.35rem .65rem}
 
-        /* Approved CRM / JARVIS mode switch — built on real buttons (data-testid
-           is stable across Streamlit versions; baseweb radio internals are not) */
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor){padding:.7rem .72rem .6rem;margin:.25rem 0 .85rem;overflow:visible;position:relative}
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"]{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:3px;border-radius:999px;position:relative}
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"]{width:100%}
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"] button{width:100%;border:none;background:transparent;box-shadow:none;border-radius:999px;padding:.62rem .4rem;margin:0;cursor:pointer;transition:all .28s ease;font-size:.76rem;font-weight:850;letter-spacing:.04em}
+        /* Approved CRM / JARVIS mode switch — built on real buttons. Scoped to
+           the stVerticalBlock carrying our own .workspace-mode-anchor marker:
+           newer Streamlit renders border=True containers directly on
+           stVerticalBlock (inline border style) instead of the separate
+           stVerticalBlockBorderWrapper div older versions used, and
+           stVerticalBlock alone isn't a safe hook since every container
+           (bordered or not) has that testid. :has(.workspace-mode-anchor)
+           on its own isn't safe either — :has() matches ANY ancestor, so it
+           also matched the unbordered stVerticalBlock one level further out
+           that happens to contain this one, applying the pill/grid layout to
+           the wrong (much wider) box and wrapping the button text. Requiring
+           a DIRECT child stElementContainer pins this to just the innermost
+           block that actually wraps the marker. */
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){padding:.7rem .72rem .6rem;margin:.25rem 0 .85rem;overflow:visible;position:relative}
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:3px;border-radius:999px;position:relative}
+        /* stColumn ships its own flex-basis:calc(50% - 16px) for Streamlit's
+           default flex column layout; that's inert once the parent above is
+           grid, but grid still sizes an auto-width item to its content
+           instead of stretching it to fill the track, so "JARVIS" wraps
+           without an explicit width here. */
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stColumn"]{width:100%;min-width:0}
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"]{width:100%}
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"] [data-testid="stButton"] button{width:100%;border:none;background:transparent;box-shadow:none;border-radius:999px;padding:.62rem .4rem;margin:0;cursor:pointer;transition:all .28s ease;font-size:.76rem;font-weight:850;letter-spacing:.04em}
         .workspace-switch-caption{text-align:center;font-size:.64rem;margin-top:.5rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
         .workspace-switch-title{text-align:center;font-size:.62rem;font-weight:850;letter-spacing:.14em;margin-bottom:.42rem;text-transform:uppercase}
 
@@ -45,10 +111,10 @@ def apply_workspace_theme(mode: str) -> None:
         .stApp:has(.crm-mode-marker) [data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--crm-line)}
         .stApp:has(.crm-mode-marker) .eyebrow{color:var(--crm-blue)}
         .stApp:has(.crm-mode-marker) [data-testid="stMetric"],.stApp:has(.crm-mode-marker) .stChatMessage,.stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]{background:#fff;border:1px solid var(--crm-line);box-shadow:0 5px 20px rgba(16,24,40,.035)}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor){background:#fff;border:1px solid #cddcf2;box-shadow:0 10px 30px rgba(22,103,232,.08)}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#edf3fc;border:1px solid #bad0ef}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stButton"] button{color:#5e6d82}
-        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(1) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#fff 0 8%,#bfe0ff 12% 30%,#1769e8 34% 62%,#0d4fc0 66%);color:#fff;box-shadow:0 4px 14px rgba(23,105,232,.30)}
+        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){background:#fff;border:1px solid #cddcf2;box-shadow:0 10px 30px rgba(22,103,232,.08)}
+        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#edf3fc;border:1px solid #bad0ef}
+        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stButton"] button{color:#5e6d82}
+        .stApp:has(.crm-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(1) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#fff 0 8%,#bfe0ff 12% 30%,#1769e8 34% 62%,#0d4fc0 66%);color:#fff;box-shadow:0 4px 14px rgba(23,105,232,.30)}
         .stApp:has(.crm-mode-marker) .workspace-switch-title,.stApp:has(.crm-mode-marker) .workspace-switch-caption{color:#5e6d82}
         .crm-hero{padding:1.35rem 1.5rem;border:1px solid var(--crm-line);border-radius:18px;background:linear-gradient(135deg,#fff 0%,#f4f8ff 100%);box-shadow:0 10px 34px rgba(16,24,40,.045);margin-bottom:1rem}
         .crm-hero h1{margin:.12rem 0 .3rem;font-size:2rem}.crm-hero p{margin:0;color:var(--crm-muted)}
@@ -56,6 +122,8 @@ def apply_workspace_theme(mode: str) -> None:
         .crm-card{background:#fff;border:1px solid var(--crm-line);border-radius:14px;padding:1rem 1.05rem;min-height:114px;box-shadow:0 5px 20px rgba(16,24,40,.03)}
         .crm-card-label{font-size:.72rem;color:#667085;margin-bottom:.6rem}.crm-card-value{font-size:1.65rem;font-weight:850;color:#101828}.crm-card-delta{font-size:.7rem;color:#12a150;margin-top:.35rem}
         .jarvis-tip{padding:1rem 1.15rem;border-radius:14px;border:1px solid #cfe0fb;background:linear-gradient(135deg,#edf5ff,#fbfdff);color:#20304e}.jarvis-tip strong{color:#155fc7}
+        .stApp:has(.crm-mode-marker) input,.stApp:has(.crm-mode-marker) textarea,.stApp:has(.crm-mode-marker) [data-baseweb="select"]>div{background:#fff!important;color:var(--crm-ink)!important;border-color:var(--crm-line)!important}
+        .stApp:has(.crm-mode-marker) .stButton>button,.stApp:has(.crm-mode-marker) .stDownloadButton>button{color:var(--crm-ink);background:#fff;border:1px solid var(--crm-line)}
 
         /* JARVIS */
         .stApp:has(.jarvis-mode-marker){background:radial-gradient(circle at 82% 3%,rgba(0,115,255,.18),transparent 28%),radial-gradient(circle at 10% 95%,rgba(0,206,255,.10),transparent 32%),linear-gradient(145deg,#010611 0%,#020b18 48%,#05152a 100%);color:var(--jarvis-text)}
@@ -67,10 +135,10 @@ def apply_workspace_theme(mode: str) -> None:
         .stApp:has(.jarvis-mode-marker) [data-testid="stMetricLabel"],.stApp:has(.jarvis-mode-marker) [data-testid="stMetricValue"],.stApp:has(.jarvis-mode-marker) [data-testid="stMetricDelta"],.stApp:has(.jarvis-mode-marker) [data-testid="stCaptionContainer"]{color:#d5edff}
         .stApp:has(.jarvis-mode-marker) input,.stApp:has(.jarvis-mode-marker) textarea,.stApp:has(.jarvis-mode-marker) [data-baseweb="select"]>div{background:#06172b!important;color:#eaf7ff!important;border-color:rgba(52,173,255,.30)!important}
         .stApp:has(.jarvis-mode-marker) .stButton>button,.stApp:has(.jarvis-mode-marker) .stDownloadButton>button{color:#e3f8ff;background:linear-gradient(135deg,#071f3b,#0a3159);border:1px solid rgba(48,174,255,.40)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor){background:rgba(2,12,26,.98);border:1px solid rgba(30,144,255,.48);box-shadow:0 0 34px rgba(0,128,255,.18)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#041326;border:1px solid rgba(30,144,255,.34);box-shadow:inset 0 0 18px rgba(0,128,255,.10)}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stButton"] button{color:#7fa9c8}
-        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlockBorderWrapper"]:has(.workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(2) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#dffcff 0 5%,#23d6ff 7% 14%,#087df5 18% 38%,#03152d 42% 55%,#0a8cff 58% 61%,#06162a 64%);color:#7fe9ff;box-shadow:0 0 12px #138cff,0 0 30px rgba(0,157,255,.62);text-shadow:0 0 12px #20cfff}
+        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor){background:rgba(2,12,26,.98);border:1px solid rgba(30,144,255,.48);box-shadow:0 0 34px rgba(0,128,255,.18)}
+        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]{background:#041326;border:1px solid rgba(30,144,255,.34);box-shadow:inset 0 0 18px rgba(0,128,255,.10)}
+        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stButton"] button{color:#7fa9c8}
+        .stApp:has(.jarvis-mode-marker) div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .workspace-mode-anchor) [data-testid="stHorizontalBlock"]>div:nth-child(2) [data-testid="stButton"] button{background:radial-gradient(circle at 50% 50%,#dffcff 0 5%,#23d6ff 7% 14%,#087df5 18% 38%,#03152d 42% 55%,#0a8cff 58% 61%,#06162a 64%);color:#7fe9ff;box-shadow:0 0 12px #138cff,0 0 30px rgba(0,157,255,.62);text-shadow:0 0 12px #20cfff}
         .stApp:has(.jarvis-mode-marker) .workspace-switch-title,.stApp:has(.jarvis-mode-marker) .workspace-switch-caption{color:#65dfff;text-shadow:0 0 10px rgba(32,207,255,.55)}
         .jarvis-hero{display:grid;grid-template-columns:88px 1fr;align-items:center;gap:1.15rem;padding:1.45rem;border-radius:16px;border:1px solid rgba(31,145,255,.42);background:radial-gradient(circle at 88% 12%,rgba(0,146,255,.20),transparent 34%),linear-gradient(135deg,rgba(3,15,29,.98),rgba(5,34,62,.90));box-shadow:0 24px 80px rgba(0,0,0,.32),inset 0 0 45px rgba(0,132,255,.06);margin-bottom:1rem}
         .jarvis-hero h1{margin:.1rem 0 .25rem;color:#f2fbff}.jarvis-hero p{margin:0;color:#9fc5e1}.jarvis-status{color:#4edfff;font-size:.66rem;font-weight:900;letter-spacing:.17em}
@@ -123,7 +191,7 @@ def apply_workspace_theme(mode: str) -> None:
         .jv-metric-delta.flat{color:#8fb4d2}
         .jv-metric-spark{margin-top:.55rem;width:100%;height:34px;display:block}
 
-        div[data-testid="stVerticalBlockBorderWrapper"]:has(.jv-panel-anchor){padding:1.1rem 1.2rem 1.2rem}
+        div[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .jv-panel-anchor){padding:1.1rem 1.2rem 1.2rem}
         .jv-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem}
         .jv-panel-eyebrow{font-size:.7rem;font-weight:850;letter-spacing:.14em;color:#5fe3ff;text-transform:uppercase}
         .stApp:has(.crm-mode-marker) .jv-panel-eyebrow{color:var(--crm-blue)}
@@ -177,6 +245,85 @@ def apply_workspace_theme(mode: str) -> None:
         [data-testid="stSidebar"] div[role="radiogroup"]:not(:has(.workspace-mode-anchor)) label[data-baseweb="radio"]{border-radius:10px;padding:.5rem .6rem;margin-bottom:.1rem}
         .stApp:has(.jarvis-mode-marker) [data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:has(input:checked){background:linear-gradient(135deg,rgba(9,132,255,.22),rgba(53,217,255,.12));border:1px solid rgba(52,173,255,.4)}
         .stApp:has(.crm-mode-marker) [data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:has(input:checked){background:#edf3fc;border:1px solid #bad0ef}
+
+        /* ---------- Force each workspace to its own theme regardless of the
+           viewer's Streamlit theme setting (System/Light/Dark). The rules
+           above only restyle elements this app explicitly wraps in custom
+           classes; plenty of native Streamlit widgets (buttons, expanders,
+           dataframes, tabs, checkboxes, the chat-input's bottom bar, and
+           anything rendered as a BaseWeb popover — selectbox dropdowns,
+           date-picker calendars) were never covered and just inherited
+           whatever base theme the viewer had picked, which is exactly what
+           broke when that base theme didn't match the workspace's own
+           design. Popovers/dropdowns render as portals appended straight to
+           <body>, not nested inside .stApp, so they need body:has(...)
+           scoping instead of .stApp:has(...) — a plain .stApp selector
+           silently never matches them. ---------- */
+
+        /* CRM: force light on every remaining native widget. Button rules
+           deliberately have no !important — the workspace-switch pill
+           buttons (lines above, inside .workspace-mode-anchor) rely on
+           winning this exact conflict via higher selector specificity,
+           and !important here would defeat that regardless of specificity. */
+        .stApp:has(.crm-mode-marker) [data-testid="stFormSubmitButton"]>button,
+        .stApp:has(.crm-mode-marker) [data-testid^="stBaseButton"]{color:var(--crm-ink);background:#fff;border:1px solid var(--crm-line)}
+        .stApp:has(.crm-mode-marker) [data-testid="stExpander"]{background:#fff!important;border:1px solid var(--crm-line)!important;border-radius:14px}
+        .stApp:has(.crm-mode-marker) [data-testid="stExpander"] summary,
+        .stApp:has(.crm-mode-marker) [data-testid="stExpander"] p{color:var(--crm-ink)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stDataFrame"],
+        .stApp:has(.crm-mode-marker) [data-testid="stDataFrameResizable"],
+        .stApp:has(.crm-mode-marker) [data-testid="stTable"]{background:#fff!important;border:1px solid var(--crm-line)!important;border-radius:10px;color-scheme:light}
+        .stApp:has(.crm-mode-marker) [data-testid="stTabs"] [data-baseweb="tab-list"]{background:transparent!important;border-bottom:1px solid var(--crm-line)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stTabs"] button{color:var(--crm-muted)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stTabs"] button[aria-selected="true"]{color:var(--crm-blue)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stCheckbox"] label,
+        .stApp:has(.crm-mode-marker) [data-testid="stRadio"] label,
+        .stApp:has(.crm-mode-marker) [data-testid="stSlider"] label{color:var(--crm-ink)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stFileUploader"]{background:#fff!important;border:1px solid var(--crm-line)!important;color:var(--crm-ink)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stFileUploaderDropzone"]{background:var(--crm-soft)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stCode"],
+        .stApp:has(.crm-mode-marker) [data-testid="stCode"] pre{background:var(--crm-soft)!important;color:var(--crm-ink)!important;border:1px solid var(--crm-line)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stBottom"]{background:var(--crm-soft)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stChatInput"]{background:#fff!important;border:1px solid var(--crm-line)!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stChatInputSubmitButton"]{background:var(--crm-blue)!important;color:#fff!important}
+        .stApp:has(.crm-mode-marker) [data-testid="stProgress"] > div > div{background:var(--crm-line)!important}
+        body:has(.crm-mode-marker) [data-baseweb="popover"],
+        body:has(.crm-mode-marker) [data-baseweb="menu"],
+        body:has(.crm-mode-marker) [data-baseweb="calendar"],
+        body:has(.crm-mode-marker) [data-testid="stSelectboxVirtualDropdown"]{background:#fff!important;color:var(--crm-ink)!important;border:1px solid var(--crm-line)!important;color-scheme:light}
+        body:has(.crm-mode-marker) [data-baseweb="popover"] *,
+        body:has(.crm-mode-marker) [data-testid="stSelectboxVirtualDropdown"] *{color:var(--crm-ink)}
+
+        /* JARVIS: force dark on every remaining native widget. Button rules
+           deliberately have no !important — see the matching CRM comment
+           above; the workspace-switch pill buttons need to keep winning
+           this conflict via specificity. */
+        .stApp:has(.jarvis-mode-marker) [data-testid="stFormSubmitButton"]>button,
+        .stApp:has(.jarvis-mode-marker) [data-testid^="stBaseButton"]{color:#e3f8ff;background:linear-gradient(135deg,#071f3b,#0a3159);border:1px solid rgba(48,174,255,.40)}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stExpander"]{background:linear-gradient(145deg,rgba(5,17,32,.97),rgba(7,29,52,.88))!important;border:1px solid var(--jarvis-line)!important;border-radius:14px}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stExpander"] summary,
+        .stApp:has(.jarvis-mode-marker) [data-testid="stExpander"] p{color:var(--jarvis-text)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stDataFrame"],
+        .stApp:has(.jarvis-mode-marker) [data-testid="stDataFrameResizable"],
+        .stApp:has(.jarvis-mode-marker) [data-testid="stTable"]{background:#06172b!important;border:1px solid var(--jarvis-line)!important;border-radius:10px;color-scheme:dark}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stTabs"] [data-baseweb="tab-list"]{background:transparent!important;border-bottom:1px solid var(--jarvis-line)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stTabs"] button{color:var(--jarvis-muted)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stTabs"] button[aria-selected="true"]{color:var(--jarvis-cyan)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stCheckbox"] label,
+        .stApp:has(.jarvis-mode-marker) [data-testid="stRadio"] label,
+        .stApp:has(.jarvis-mode-marker) [data-testid="stSlider"] label{color:var(--jarvis-text)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stFileUploader"]{background:#06172b!important;border:1px solid var(--jarvis-line)!important;color:var(--jarvis-text)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stFileUploaderDropzone"]{background:#081a30!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stCode"],
+        .stApp:has(.jarvis-mode-marker) [data-testid="stCode"] pre{background:#020c1a!important;color:var(--jarvis-text)!important;border:1px solid var(--jarvis-line)!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stBottom"]{background:transparent!important}
+        .stApp:has(.jarvis-mode-marker) [data-testid="stProgress"] > div > div{background:var(--jarvis-line)!important}
+        body:has(.jarvis-mode-marker) [data-baseweb="popover"],
+        body:has(.jarvis-mode-marker) [data-baseweb="menu"],
+        body:has(.jarvis-mode-marker) [data-baseweb="calendar"],
+        body:has(.jarvis-mode-marker) [data-testid="stSelectboxVirtualDropdown"]{background:#06172b!important;color:var(--jarvis-text)!important;border:1px solid var(--jarvis-line)!important;color-scheme:dark}
+        body:has(.jarvis-mode-marker) [data-baseweb="popover"] *,
+        body:has(.jarvis-mode-marker) [data-testid="stSelectboxVirtualDropdown"] *{color:var(--jarvis-text)}
         </style>
         """,
         unsafe_allow_html=True,
@@ -193,6 +340,7 @@ def render_workspace_switch() -> None:
             if st.button("CRM", key="ws_btn_crm", use_container_width=True):
                 if current != "CRM":
                     st.session_state["workspace_mode"] = "CRM"
+                    st.query_params["workspace"] = "crm"
                     st.session_state.pop("crm_page", None)
                     st.session_state.pop("jarvis_page", None)
                     st.session_state.pop("jarvis_secondary_page", None)
@@ -201,6 +349,7 @@ def render_workspace_switch() -> None:
             if st.button("JARVIS", key="ws_btn_jarvis", use_container_width=True):
                 if current != "JARVIS":
                     st.session_state["workspace_mode"] = "JARVIS"
+                    st.query_params["workspace"] = "jarvis"
                     st.session_state.pop("crm_page", None)
                     st.session_state.pop("jarvis_page", None)
                     st.session_state.pop("jarvis_secondary_page", None)
