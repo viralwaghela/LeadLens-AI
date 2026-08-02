@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path

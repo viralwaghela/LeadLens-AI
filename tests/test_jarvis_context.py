@@ -1,6 +1,8 @@
 """Regression checks for Jarvis context grounding and privacy."""
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 from services.jarvis_context import build_jarvis_context, context_audit
 
 

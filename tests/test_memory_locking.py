@@ -7,6 +7,8 @@ Runs entirely against a temporary local store, never the real database.
 """
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 import tempfile
 from pathlib import Path
 

@@ -1,6 +1,8 @@
 """Safety and traceability tests for approval-gated external actions."""
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 import os
 import tempfile
 from pathlib import Path

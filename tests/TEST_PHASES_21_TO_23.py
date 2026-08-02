@@ -1,3 +1,5 @@
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 from services.integration_manager_v21 import prepare_execution, execution_rows
 from services.learning_memory_v22 import record_learning_outcome, recommendation_context
 from services.agent_collaboration_v23 import run_agent_council

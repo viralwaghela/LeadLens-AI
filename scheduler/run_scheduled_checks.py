@@ -34,22 +34,8 @@ same (check function, item_key) pair is only ever acted on once, so a
 patient who is still renewal-due on the next hourly run doesn't get
 flagged or queued again.
 
-Example of the shape a real check will have (Phase 1 will add these —
-none are registered yet, this file is the foundation only):
-
-    @check
-    def low_booking_alert() -> CheckResult:
-        from services.clinic_data_service import clinic_metrics
-        metrics = clinic_metrics()
-        if metrics["upcoming_appointments"] < THRESHOLD:
-            raised = raise_owner_alert(
-                "low_booking_alert",
-                date.today().isoformat(),
-                title="Bookings are running low",
-                message=f"Only {metrics['upcoming_appointments']} upcoming appointments.",
-            )
-            return CheckResult(alerts_raised=1 if raised else 0)
-        return CheckResult()
+Automation Roadmap Phase 1, item 1 (low_booking_alert) is implemented
+below — see it for the concrete shape a check takes in practice.
 """
 from __future__ import annotations
 
@@ -198,6 +184,81 @@ def queue_patient_action(
     )
     _mark_flagged(check_name, item_key, title)
     return item
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 checks (docs/AUTOMATION_ROADMAP.md)
+# ---------------------------------------------------------------------------
+
+# Tunable business judgment calls, kept as named constants rather than
+# buried in the check body — adjust these directly, no other code changes
+# needed. Current defaults: alert when the next 7 days' scheduled
+# appointments cover less than half of active therapists' combined weekly
+# capacity.
+LOW_BOOKING_LOOKAHEAD_DAYS = 7
+LOW_BOOKING_MIN_UTILIZATION = 0.5
+
+
+@check
+def low_booking_alert() -> CheckResult:
+    """Tier 1: alert the owner when the clinic is under-booked for the
+    week ahead relative to therapist capacity — catching it while there's
+    still time to fill the gap, not after the week has already passed.
+
+    Fires at most once per calendar day while the shortfall persists (a
+    fresh item_key each day means it starts alerting again the next day
+    if the situation hasn't improved, rather than alerting only once
+    ever)."""
+    from datetime import date, timedelta
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    window = {
+        (today + timedelta(days=offset)).isoformat()
+        for offset in range(LOW_BOOKING_LOOKAHEAD_DAYS)
+    }
+
+    booked = sum(
+        1
+        for row in list_records("appointments")
+        if row.get("status") == "Scheduled" and row.get("appointment_date") in window
+    )
+    weekly_capacity = sum(
+        int(row.get("weekly_capacity", 0) or 0)
+        for row in list_records("therapists")
+        if row.get("status") == "Active"
+    )
+
+    if weekly_capacity <= 0:
+        return CheckResult(detail="No active therapist capacity on record; skipped.")
+
+    utilization = booked / weekly_capacity
+    detail = (
+        f"{booked}/{weekly_capacity} slots booked for the next "
+        f"{LOW_BOOKING_LOOKAHEAD_DAYS} days ({utilization:.0%})"
+    )
+
+    if utilization >= LOW_BOOKING_MIN_UTILIZATION:
+        return CheckResult(detail=detail)
+
+    raised = raise_owner_alert(
+        "low_booking_alert",
+        today.isoformat(),
+        title="Bookings are running low for the week ahead",
+        message=(
+            f"Only {booked} of {weekly_capacity} weekly therapist slots are "
+            f"booked for the next {LOW_BOOKING_LOOKAHEAD_DAYS} days "
+            f"({utilization:.0%} utilization, target is "
+            f"{LOW_BOOKING_MIN_UTILIZATION:.0%}+)."
+        ),
+        department="Operations",
+    )
+    return CheckResult(
+        alerts_raised=1 if raised else 0,
+        skipped_duplicate=0 if raised else 1,
+        detail=detail,
+    )
 
 
 # ---------------------------------------------------------------------------

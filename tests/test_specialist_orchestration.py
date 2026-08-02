@@ -1,6 +1,8 @@
 """Regression tests for specialist routing and read-only orchestration."""
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
+
 from services.agent_router import determine_agents
 from services.jarvis_context import build_jarvis_context
 from services.jarvis_tools import READ_ONLY_TOOLS, run_read_only_tool

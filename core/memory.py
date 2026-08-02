@@ -87,7 +87,20 @@ def _fresh_default():
 
 
 def _database_url() -> str:
-    return os.getenv("DATABASE_URL", "").strip()
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url and os.getenv("LEADLENS_TESTING", "").strip():
+        raise RuntimeError(
+            "DATABASE_URL is set while LEADLENS_TESTING is active — refusing "
+            "to let a test reach the real database. Every file in tests/ "
+            "must import tests._bootstrap first, which sets this guard and "
+            "clears DATABASE_URL; if you're seeing this, either that import "
+            "is missing, or something (e.g. a later load_dotenv() call) "
+            "re-populated DATABASE_URL afterward. If you're intentionally "
+            "verifying against the real database, use "
+            "tests/manual/staleness_repro.py instead — it isn't part of the "
+            "guarded suite."
+        )
+    return url
 
 
 def _using_postgres() -> bool:
