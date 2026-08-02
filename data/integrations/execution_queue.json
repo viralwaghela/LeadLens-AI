@@ -1,0 +1,23 @@
+[
+  {
+    "id": "EXEC-C4C592EBEF",
+    "provider": "gmail",
+    "action": "create_draft",
+    "payload": {
+      "to": "test@example.com",
+      "subject": "Test",
+      "body": "Hello"
+    },
+    "title": "Automated test",
+    "impact": "",
+    "recommendation_id": "",
+    "approval_id": "APPROVALS-F71B9621",
+    "approval_status": "Pending",
+    "status": "Awaiting approval",
+    "fingerprint": "a12598bb9ed88ac22223",
+    "created_at": "2026-07-30T01:45:40",
+    "approved_at": "",
+    "executed_at": "",
+    "result": null
+  }
+]

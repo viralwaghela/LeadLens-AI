@@ -1,0 +1,4 @@
+LeadLens Phase 2 Verified Build
+Build marker: PHASE-2-REAL-AGENT-EXECUTION
+Expected workspace label: LEADLENS V2 · PHASE 2
+Expected sales response heading: Sales Agent

@@ -1,0 +1,57 @@
+LEADLENS CAREOS — OPENAI JARVIS BUILD
+
+1. Extract this ZIP into a new folder.
+2. Open PowerShell inside the extracted LeadLens_CareOS folder.
+3. Create and activate a virtual environment:
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+4. Install the project packages:
+   python -m pip install -r requirements.txt
+5. Create your private environment file:
+   Copy-Item .env.example .env
+6. Open .env and add your real key:
+   OPENAI_API_KEY=your_real_key_here
+   OPENAI_MODEL=gpt-5.1
+   OPENAI_FAST_MODEL=gpt-5-mini
+6b. Set an access password before showing this to anyone or deploying it:
+    APP_PASSWORD=choose_a_real_password
+    Without this set, the dashboard is open to anyone with the URL — the
+    app will show a loud on-screen warning until you set it.
+7. Start the app:
+   python -m streamlit run app.py --server.port 8501
+8. Open http://localhost:8501 and enter your APP_PASSWORD if prompted.
+9. Open AI Chief of Staff > Data grounding status to verify the sources
+   Jarvis loaded.
+10. Ask: How are sales doing?
+11. Open Consultation trace and confirm Sales Agent was consulted in
+    read-only mode.
+
+Your Beyond Pain sample business memory is included, stored in
+database/company.json. On first run it is automatically migrated into
+database/leadlens.db (SQLite) and the old JSON file is renamed to a
+dated backup rather than deleted. From then on, leadlens.db is the real
+data file — back it up regularly (core.memory.backup_now() creates a
+timestamped copy in database/backups/), and if you deploy this anywhere,
+make sure database/ sits on a persistent disk/volume. Most free or
+default hosting tiers wipe local disk on every restart or redeploy,
+which would otherwise silently delete a clinic's data.
+
+MOVING DATA OFF LOCAL DISK (recommended before real customers, and
+required if deploying on Streamlit Community Cloud's free tier):
+1. Create a free Postgres database on Supabase (supabase.com) or
+   Neon (neon.tech) — either works, it's just standard Postgres.
+2. Copy the connection string they give you.
+3. Add it to .env as: DATABASE_URL=postgresql://...
+4. Restart the app. Whatever data already exists locally (leadlens.db,
+   or the original company.json if you never ran it yet) is copied into
+   Postgres automatically the first time it connects — nothing is lost.
+5. From then on the app reads/writes that Postgres database instead of
+   the local file, no matter where the app itself is hosted or how often
+   it restarts. Leave DATABASE_URL blank to go back to local SQLite.
+
+The real API key is deliberately not included in this ZIP.
+Never put the key (or APP_PASSWORD, or DATABASE_URL) in .env.example,
+services/ai.py, screenshots or GitHub.
+
+If OpenAI is unavailable, Jarvis displays an explicit local fallback and
+does not claim that any external action was completed.

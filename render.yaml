@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: leadlens-careos
+    env: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /_stcore/health

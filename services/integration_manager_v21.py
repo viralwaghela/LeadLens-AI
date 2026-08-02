@@ -1,0 +1,356 @@
+"""Approval-gated preparation and execution of external actions.
+
+Every action is validated and persisted before an approval is created. Nothing
+is sent merely because Jarvis recommended it. An approved action still requires
+an explicit Execute click, and every result is linked back to Jarvis memory.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+import tempfile
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from core.memory import (
+    add_memory_entry,
+    load_memory,
+    update_approval_status,
+)
+from integrations.calendar_service import GoogleCalendarService
+from integrations.gmail_service import GmailService
+from integrations.whatsapp_service import WhatsAppBusinessService
+from services.jarvis_memory import record_action_execution
+from services.security_service import audit_event
+
+ROOT = Path(__file__).resolve().parents[1]
+QUEUE = ROOT / "data" / "integrations" / "execution_queue.json"
+QUEUE.parent.mkdir(parents=True, exist_ok=True)
+_LOCK = threading.RLock()
+
+ALLOWED_ACTIONS = {
+    "calendar": {"create_event"},
+    "gmail": {"create_draft", "send_email"},
+    "whatsapp": {"send_text"},
+}
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _clean(value: Any, limit: int = 4000) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _load() -> list[dict[str, Any]]:
+    with _LOCK:
+        if not QUEUE.exists():
+            return []
+        try:
+            value = json.loads(QUEUE.read_text(encoding="utf-8"))
+            return value if isinstance(value, list) else []
+        except (OSError, json.JSONDecodeError):
+            return []
+
+
+def _save(rows: list[dict[str, Any]]) -> None:
+    with _LOCK:
+        QUEUE.parent.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(
+            prefix="execution_queue_",
+            suffix=".json",
+            dir=QUEUE.parent,
+        )
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                json.dump(
+                    rows[-2000:],
+                    file,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, QUEUE)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+
+
+def _validate(
+    provider: str,
+    action: str,
+    payload: dict[str, Any],
+) -> tuple[str, str, dict[str, Any]]:
+    clean_provider = _clean(provider, 40).casefold()
+    clean_action = _clean(action, 60).casefold()
+    if clean_provider not in ALLOWED_ACTIONS:
+        raise ValueError(f"Unsupported provider: {clean_provider or 'missing'}")
+    if clean_action not in ALLOWED_ACTIONS[clean_provider]:
+        raise ValueError(
+            f"Unsupported {clean_provider} action: "
+            f"{clean_action or 'missing'}"
+        )
+    if not isinstance(payload, dict):
+        raise ValueError("Action payload must be an object.")
+
+    clean_payload = copy.deepcopy(payload)
+    required = {
+        ("calendar", "create_event"): ("summary", "start", "end"),
+        ("gmail", "create_draft"): ("to", "subject", "body"),
+        ("gmail", "send_email"): ("to", "subject", "body"),
+        ("whatsapp", "send_text"): ("to", "body"),
+    }[(clean_provider, clean_action)]
+    missing = [
+        key for key in required
+        if not _clean(clean_payload.get(key))
+    ]
+    if missing:
+        raise ValueError(
+            "Missing required action fields: " + ", ".join(missing)
+        )
+    return clean_provider, clean_action, clean_payload
+
+
+def _fingerprint(
+    provider: str,
+    action: str,
+    payload: dict[str, Any],
+) -> str:
+    canonical = json.dumps(
+        [provider, action, payload],
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+
+
+def integration_statuses() -> list[dict[str, Any]]:
+    return [
+        GoogleCalendarService().status(),
+        GmailService().status(),
+        WhatsAppBusinessService().status(),
+    ]
+
+
+def prepare_execution(
+    provider: str,
+    action: str,
+    payload: dict[str, Any],
+    title: str = "",
+    *,
+    recommendation_id: str = "",
+    impact: str = "",
+) -> dict[str, Any]:
+    """Validate and store an action, then create its unique approval."""
+    provider, action, payload = _validate(provider, action, payload)
+    fingerprint = _fingerprint(provider, action, payload)
+    rows = _load()
+    existing = next(
+        (
+            row for row in rows
+            if row.get("fingerprint") == fingerprint
+            and row.get("status") in {
+                "Awaiting approval",
+                "Approved",
+            }
+        ),
+        None,
+    )
+    if existing:
+        return copy.deepcopy(existing)
+
+    item_id = f"EXEC-{uuid4().hex[:10].upper()}"
+    clean_title = _clean(
+        title or action.replace("_", " ").title(),
+        300,
+    )
+    risk_level = (
+        "Medium"
+        if provider == "gmail" and action == "create_draft"
+        else "High"
+    )
+    approval = add_memory_entry("approvals", {
+        "title": clean_title,
+        "department": "Integrations",
+        "risk_level": risk_level,
+        "status": "Pending",
+        "execution_id": item_id,
+        "recommendation_id": _clean(recommendation_id, 40),
+    })
+    item = {
+        "id": item_id,
+        "provider": provider,
+        "action": action,
+        "payload": payload,
+        "title": clean_title,
+        "impact": _clean(impact, 800),
+        "recommendation_id": _clean(recommendation_id, 40),
+        "approval_id": approval.get("id", ""),
+        "approval_status": "Pending",
+        "status": "Awaiting approval",
+        "fingerprint": fingerprint,
+        "created_at": _now(),
+        "approved_at": "",
+        "executed_at": "",
+        "result": None,
+    }
+    rows.append(item)
+    _save(rows)
+    audit_event("local-owner", "prepare_execution", provider, item_id)
+    return copy.deepcopy(item)
+
+
+def _approval_status(approval_id: str) -> str:
+    for row in load_memory().get("approvals", []):
+        if row.get("id") == approval_id:
+            return str(row.get("data", {}).get("status", "Pending"))
+    return "Missing"
+
+
+def decide_item(item_id: str, decision: str) -> dict[str, Any]:
+    """Approve or reject a prepared action."""
+    canonical = _clean(decision, 20).title()
+    if canonical not in {"Approved", "Rejected"}:
+        raise ValueError("Decision must be Approved or Rejected.")
+    rows = _load()
+    item = next((row for row in rows if row.get("id") == item_id), None)
+    if item is None:
+        return {
+            "success": False,
+            "status": "not_found",
+            "detail": "Prepared action was not found.",
+        }
+    if item.get("status") in {"Sent", "Simulated", "Failed"}:
+        return {
+            "success": False,
+            "status": "already_executed",
+            "detail": "An executed action cannot be re-decided.",
+        }
+    update_approval_status(item.get("approval_id", ""), canonical)
+    item["approval_status"] = canonical
+    item["status"] = canonical if canonical == "Approved" else "Rejected"
+    item["approved_at"] = _now() if canonical == "Approved" else ""
+    item["rejected_at"] = _now() if canonical == "Rejected" else ""
+    _save(rows)
+    audit_event(
+        "local-owner",
+        canonical.casefold(),
+        item.get("provider", ""),
+        item_id,
+    )
+    return copy.deepcopy(item)
+
+
+def execute_item(item_id: str) -> dict[str, Any]:
+    """Execute exactly once, and only after approval."""
+    rows = _load()
+    item = next((row for row in rows if row.get("id") == item_id), None)
+    if not item:
+        return {
+            "success": False,
+            "status": "not_found",
+            "detail": "Prepared action was not found.",
+        }
+    if item.get("status") in {"Sent", "Simulated", "Failed"}:
+        return copy.deepcopy(item.get("result") or {
+            "success": item.get("status") in {"Sent", "Simulated"},
+            "status": item.get("status"),
+        })
+
+    approval_status = _approval_status(item.get("approval_id", ""))
+    if approval_status.casefold() != "approved":
+        return {
+            "success": False,
+            "status": "blocked",
+            "detail": f"Approval status is {approval_status}.",
+        }
+
+    provider, action, payload = _validate(
+        item["provider"],
+        item["action"],
+        item["payload"],
+    )
+    if provider == "calendar":
+        result = GoogleCalendarService().create_event(payload)
+    elif provider == "gmail":
+        service = GmailService()
+        result = (
+            service.create_draft(payload)
+            if action == "create_draft"
+            else service.send_email(payload)
+        )
+    else:
+        result = WhatsAppBusinessService().send_text(payload)
+
+    result_dict = result.to_dict()
+    item["result"] = result_dict
+    item["approval_status"] = "Approved"
+    item["status"] = (
+        "Sent"
+        if result.success and result.status == "sent"
+        else "Simulated"
+        if result.success
+        else "Failed"
+    )
+    item["executed_at"] = _now()
+    _save(rows)
+    add_memory_entry("reports", {
+        "type": "Integration Execution",
+        "title": item["title"],
+        "provider": provider,
+        "action": action,
+        "status": item["status"],
+        "execution_id": item_id,
+        "recommendation_id": item.get("recommendation_id", ""),
+        "external_id": result.external_id,
+        "detail": result.detail,
+    })
+    record_action_execution(
+        item.get("recommendation_id", ""),
+        item_id,
+        provider,
+        action,
+        item["status"],
+        result_dict,
+    )
+    audit_event(
+        "local-owner",
+        "execute",
+        provider,
+        f"{item_id}:{item['status']}",
+    )
+    return copy.deepcopy(result_dict)
+
+
+def execution_rows() -> list[dict[str, Any]]:
+    rows = _load()
+    changed = False
+    for item in rows:
+        status = _approval_status(item.get("approval_id", ""))
+        if item.get("approval_status") != status:
+            item["approval_status"] = status
+            if (
+                status == "Approved"
+                and item.get("status") == "Awaiting approval"
+            ):
+                item["status"] = "Approved"
+            elif (
+                status == "Rejected"
+                and item.get("status") in {
+                    "Awaiting approval",
+                    "Approved",
+                }
+            ):
+                item["status"] = "Rejected"
+            changed = True
+    if changed:
+        _save(rows)
+    return list(reversed(copy.deepcopy(rows)))

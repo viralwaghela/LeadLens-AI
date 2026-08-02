@@ -1,0 +1,422 @@
+[
+  {
+    "timestamp": "2026-07-19T15:20:06",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-2EF8AC02E0"
+  },
+  {
+    "timestamp": "2026-07-26T07:02:40",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-C0A38CB5E7"
+  },
+  {
+    "timestamp": "2026-07-26T07:02:40",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-C0A38CB5E7"
+  },
+  {
+    "timestamp": "2026-07-26T07:02:40",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-C0A38CB5E7:Simulated"
+  },
+  {
+    "timestamp": "2026-07-26T07:02:40",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-01EB318CFF"
+  },
+  {
+    "timestamp": "2026-07-26T07:02:40",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-01EB318CFF"
+  },
+  {
+    "timestamp": "2026-07-26T07:03:44",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-30734ECE9E"
+  },
+  {
+    "timestamp": "2026-07-26T07:03:44",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-30734ECE9E"
+  },
+  {
+    "timestamp": "2026-07-26T07:03:44",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-30734ECE9E:Simulated"
+  },
+  {
+    "timestamp": "2026-07-26T07:03:44",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-34D0D09468"
+  },
+  {
+    "timestamp": "2026-07-26T07:03:44",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-34D0D09468"
+  },
+  {
+    "timestamp": "2026-07-26T07:14:47",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-1C3253CEA1"
+  },
+  {
+    "timestamp": "2026-07-26T07:14:47",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-1C3253CEA1"
+  },
+  {
+    "timestamp": "2026-07-26T07:14:47",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-1C3253CEA1:Simulated"
+  },
+  {
+    "timestamp": "2026-07-26T07:14:47",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-1F070B2809"
+  },
+  {
+    "timestamp": "2026-07-26T07:14:47",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-1F070B2809"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:33",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-1814392D48"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:33",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-1814392D48"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:33",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-1814392D48:Simulated"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:33",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-ECA41C1360"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:33",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-ECA41C1360"
+  },
+  {
+    "timestamp": "2026-07-30T01:45:40",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-C4C592EBEF"
+  },
+  {
+    "timestamp": "2026-07-30T01:47:09",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-86B9444278"
+  },
+  {
+    "timestamp": "2026-07-30T01:47:09",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-86B9444278"
+  },
+  {
+    "timestamp": "2026-07-30T01:47:09",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-86B9444278:Simulated"
+  },
+  {
+    "timestamp": "2026-07-30T01:47:09",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-AA9F71E749"
+  },
+  {
+    "timestamp": "2026-07-30T01:47:09",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-AA9F71E749"
+  },
+  {
+    "timestamp": "2026-07-30T01:48:55",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-E2E5581435"
+  },
+  {
+    "timestamp": "2026-07-30T01:48:55",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-E2E5581435"
+  },
+  {
+    "timestamp": "2026-07-30T01:48:55",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-E2E5581435:Simulated"
+  },
+  {
+    "timestamp": "2026-07-30T01:48:55",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-BEBC41538B"
+  },
+  {
+    "timestamp": "2026-07-30T01:48:55",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-BEBC41538B"
+  },
+  {
+    "timestamp": "2026-07-30T01:49:02",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-C8F1C574B8"
+  },
+  {
+    "timestamp": "2026-07-30T01:49:02",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-C8F1C574B8"
+  },
+  {
+    "timestamp": "2026-07-30T01:49:02",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-C8F1C574B8:Simulated"
+  },
+  {
+    "timestamp": "2026-07-30T01:49:03",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-6641784EFC"
+  },
+  {
+    "timestamp": "2026-07-30T01:49:03",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-6641784EFC"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:04",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-F219193174"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:04",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-F219193174"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:04",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-F219193174:Simulated"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:04",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-E8D6B44844"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:04",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-E8D6B44844"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:12",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-E9AC5FE79A"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:20",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-626A284840"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:20",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-626A284840"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:20",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-626A284840:Simulated"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:20",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-2E7582C259"
+  },
+  {
+    "timestamp": "2026-08-01T20:47:21",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-2E7582C259"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:45",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-1B7BB52966"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:45",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-1B7BB52966"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:45",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-1B7BB52966:Simulated"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:45",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-35C3641CF1"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:45",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-35C3641CF1"
+  },
+  {
+    "timestamp": "2026-08-02T07:38:50",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-6AD32B5CC2"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:12",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "gmail",
+    "detail": "EXEC-037719096C"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:12",
+    "actor": "local-owner",
+    "action": "approved",
+    "entity": "gmail",
+    "detail": "EXEC-037719096C"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:12",
+    "actor": "local-owner",
+    "action": "execute",
+    "entity": "gmail",
+    "detail": "EXEC-037719096C:Simulated"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:12",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-9B87477BA9"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:12",
+    "actor": "local-owner",
+    "action": "rejected",
+    "entity": "whatsapp",
+    "detail": "EXEC-9B87477BA9"
+  },
+  {
+    "timestamp": "2026-08-02T07:52:16",
+    "actor": "local-owner",
+    "action": "prepare_execution",
+    "entity": "whatsapp",
+    "detail": "EXEC-DF9D52CCA9"
+  }
+]

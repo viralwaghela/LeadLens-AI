@@ -1,0 +1,1 @@
+from ui.finance.dashboard import show_finance_dashboard

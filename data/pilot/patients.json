@@ -1,0 +1,11 @@
+[
+  {
+    "patient_id": "P-001",
+    "name": "Sample Patient",
+    "phone": "",
+    "status": "Active",
+    "last_visit": "",
+    "sessions_remaining": 1,
+    "consent_to_contact": true
+  }
+]

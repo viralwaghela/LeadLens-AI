@@ -1,0 +1,124 @@
+{
+  "schema_version": 3,
+  "preferences": [],
+  "recommendations": [
+    {
+      "id": "REC-DEBEC9F4B4",
+      "question": "Measure Patient recovery",
+      "recommendation": "Patient recovery through WhatsApp for Inactive patients",
+      "agents": [],
+      "tags": [
+        "patient recovery",
+        "whatsapp"
+      ],
+      "status": "measured",
+      "fingerprint": "952869040805be4c",
+      "created_at": "2026-07-30T01:45:40",
+      "updated_at": "2026-07-30T01:49:02",
+      "latest_result": "successful"
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "OUT-9DD1C97803",
+      "recommendation_id": "REC-DEBEC9F4B4",
+      "action_type": "patient recovery",
+      "result": "successful",
+      "action_taken": "Patient recovery via WhatsApp",
+      "metrics": {
+        "audience": "Inactive patients",
+        "contacts": 10,
+        "conversions": 2,
+        "conversion_rate_percent": 20.0,
+        "revenue": 4000.0,
+        "cost": 100.0,
+        "roi_percent": 3900.0
+      },
+      "notes": "",
+      "recorded_at": "2026-07-30T01:45:40"
+    },
+    {
+      "id": "OUT-4B238E064B",
+      "recommendation_id": "REC-DEBEC9F4B4",
+      "action_type": "patient recovery",
+      "result": "successful",
+      "action_taken": "Patient recovery via WhatsApp",
+      "metrics": {
+        "audience": "Inactive patients",
+        "contacts": 10,
+        "conversions": 2,
+        "conversion_rate_percent": 20.0,
+        "revenue": 4000.0,
+        "cost": 100.0,
+        "roi_percent": 3900.0
+      },
+      "notes": "",
+      "recorded_at": "2026-07-30T01:46:15"
+    },
+    {
+      "id": "OUT-1154E25B24",
+      "recommendation_id": "REC-DEBEC9F4B4",
+      "action_type": "patient recovery",
+      "result": "successful",
+      "action_taken": "Patient recovery via WhatsApp",
+      "metrics": {
+        "audience": "Inactive patients",
+        "contacts": 10,
+        "conversions": 2,
+        "conversion_rate_percent": 20.0,
+        "revenue": 4000.0,
+        "cost": 100.0,
+        "roi_percent": 3900.0
+      },
+      "notes": "",
+      "recorded_at": "2026-07-30T01:47:01"
+    },
+    {
+      "id": "OUT-5CCB8246C5",
+      "recommendation_id": "REC-DEBEC9F4B4",
+      "action_type": "patient recovery",
+      "result": "successful",
+      "action_taken": "Patient recovery via WhatsApp",
+      "metrics": {
+        "audience": "Inactive patients",
+        "contacts": 10,
+        "conversions": 2,
+        "conversion_rate_percent": 20.0,
+        "revenue": 4000.0,
+        "cost": 100.0,
+        "roi_percent": 3900.0
+      },
+      "notes": "",
+      "recorded_at": "2026-07-30T01:47:09"
+    },
+    {
+      "id": "OUT-02463F55CD",
+      "recommendation_id": "REC-DEBEC9F4B4",
+      "action_type": "patient recovery",
+      "result": "successful",
+      "action_taken": "Patient recovery via WhatsApp",
+      "metrics": {
+        "audience": "Inactive patients",
+        "contacts": 10,
+        "conversions": 2,
+        "conversion_rate_percent": 20.0,
+        "revenue": 4000.0,
+        "cost": 100.0,
+        "roi_percent": 3900.0
+      },
+      "notes": "",
+      "recorded_at": "2026-07-30T01:49:02"
+    }
+  ],
+  "executions": [],
+  "patterns": [
+    {
+      "action_type": "patient recovery",
+      "measured_runs": 5,
+      "success_rate_percent": 100.0,
+      "confidence": "High",
+      "last_measured_at": "2026-07-30T01:49:02"
+    }
+  ],
+  "updated_at": "2026-07-30T01:49:02"
+}

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -m pip install -r requirements.txt)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8501)",
+      "Bash(./.venv/Scripts/python.exe tests/test_scheduler.py)",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe tests/test_approval_actions.py)",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe tests/test_scheduler.py)",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe scheduler/run_scheduled_checks.py)",
+      "Bash(PYTHONPATH=. ./.venv/Scripts/python.exe -c ' *)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill *)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(tasklist)",
+      "Bash(jobs -l)",
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\concurrent_writer.py\" A 6)",
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\concurrent_writer.py\" B 6)",
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\VIRALW~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Viral-Waghela-LeadLens-polish-Jarvis-Experience-LeadLens-CareOS\\\\4f601b0d-d9f3-4ea9-ac68-9ce40c04e498\\\\scratchpad\\\\app_write_simulator.py\")"
+    ]
+  }
+}
