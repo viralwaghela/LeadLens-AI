@@ -43,7 +43,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -541,6 +541,108 @@ def lead_qualification_alert() -> CheckResult:
     return CheckResult(
         alerts_raised=1 if raised else 0,
         skipped_duplicate=0 if raised else 1,
+        detail=detail,
+    )
+
+
+APPOINTMENT_REMINDER_WINDOWS = {
+    "24hr": timedelta(hours=24),
+    "2hr": timedelta(hours=2),
+}
+APPOINTMENT_REMINDER_TOLERANCE = timedelta(hours=1)
+
+
+@check
+def appointment_reminder() -> CheckResult:
+    """Tier 2+ (patient-facing): queues a WhatsApp reminder for patients
+    with a Scheduled appointment coming up in ~24 hours or ~2 hours.
+    Never sends anything itself — only drops a prepared item into the
+    Approval Queue, same as every patient-facing check in this file; a
+    human still has to approve and execute it from the Action Center UI.
+
+    appointment_time isn't validated or format-enforced anywhere in
+    services.clinic_data_service (it's free text), so this assumes the
+    common "HH:MM" shape. An appointment whose time doesn't parse that
+    way is skipped rather than guessed at — a reminder with the wrong
+    time would be worse than no reminder.
+
+    Each appointment gets at most one 24hr reminder queued and one 2hr
+    reminder queued, ever — not per-day. These are one-time reminders
+    tied to a specific appointment, not an ongoing situation like the
+    other checks in this file."""
+    from datetime import datetime
+
+    from services.clinic_data_service import get_record, list_records
+
+    now = datetime.now()
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_unparseable = 0
+
+    appointments = [
+        row for row in list_records("appointments")
+        if row.get("status") == "Scheduled"
+    ]
+
+    for appointment in appointments:
+        raw_date = str(appointment.get("appointment_date", "")).strip()
+        raw_time = str(appointment.get("appointment_time", "")).strip()
+        if not raw_date or not raw_time:
+            continue
+        try:
+            appointment_dt = datetime.strptime(f"{raw_date} {raw_time}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            skipped_unparseable += 1
+            continue
+
+        time_until = appointment_dt - now
+        if time_until.total_seconds() <= 0:
+            continue
+
+        for label, window in APPOINTMENT_REMINDER_WINDOWS.items():
+            lower = window - APPOINTMENT_REMINDER_TOLERANCE
+            upper = window + APPOINTMENT_REMINDER_TOLERANCE
+            if not (lower <= time_until <= upper):
+                continue
+
+            patient = get_record("patients", appointment.get("patient_id"))
+            if not patient or not bool(patient.get("consent_to_contact", False)):
+                continue
+            phone = str(patient.get("phone", "")).strip()
+            if not phone:
+                continue
+
+            item_key = f"{appointment.get('appointment_id')}:{label}"
+            body = (
+                f"Hi {patient.get('name', 'there')}, this is a reminder for your "
+                f"appointment on {raw_date} at {raw_time}"
+                + (f" for {appointment.get('service')}" if appointment.get("service") else "")
+                + ". Reply if you need to reschedule."
+            )
+            item = queue_patient_action(
+                "appointment_reminder",
+                item_key,
+                provider="whatsapp",
+                action="send_text",
+                payload={"to": phone, "body": body},
+                title=(
+                    f"Appointment reminder ({label}) — "
+                    f"{patient.get('name', appointment.get('patient_id'))}"
+                ),
+                impact="Routine appointment reminder, not a sales or money conversation.",
+            )
+            if item is not None:
+                queued_count += 1
+            else:
+                skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} reminder(s) queued, {skipped_duplicate} already queued, "
+        f"{skipped_unparseable} appointment(s) with unparseable time"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
         detail=detail,
     )
 
