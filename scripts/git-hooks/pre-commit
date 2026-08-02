@@ -1,0 +1,79 @@
+#!/bin/sh
+# Pre-commit hook: refuse to commit real secret material.
+#
+# Written after a near-miss on 2026-08-02 where a real database password
+# almost got committed via an auto-tracked permission entry in
+# .claude/settings.local.json (caught by hand before it happened, but only
+# because someone was reading the diff carefully — not something to rely
+# on happening every time).
+#
+# Two independent checks, either one can block the commit:
+#
+# 1. Reads secret VALUES straight out of the local .env (gitignored, never
+#    itself committed) and refuses if any of those exact values appear
+#    anywhere in the staged diff. This is the check that actually matters:
+#    it catches the real credential regardless of what shape or context it
+#    shows up in, with no pattern-guessing involved.
+# 2. A general scheme://user:password@host pattern, as a broader net for
+#    secrets that were never in this machine's own .env. A placeholder
+#    allowlist keeps this from blocking legitimate example strings like
+#    the one in .env.example.
+#
+# Installed by copying this file to .git/hooks/pre-commit — .git/hooks is
+# not tracked by git itself, so after a fresh clone, run once:
+#   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
+
+STAGED_DIFF=$(git diff --cached -U0)
+
+if [ -z "$STAGED_DIFF" ]; then
+    exit 0
+fi
+
+FAIL=0
+
+# --- Check 1: exact secret values currently configured in .env ------------
+if [ -f .env ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ''|'#'*) continue ;;
+        esac
+        value=$(printf '%s' "$value" | sed -e 's/^"//' -e 's/"$//')
+        # Skip empty or short values — too short to be a meaningful secret,
+        # and matching them would just produce noisy false positives.
+        if [ -n "$value" ] && [ ${#value} -ge 8 ]; then
+            if printf '%s' "$STAGED_DIFF" | grep -qF "$value"; then
+                echo "pre-commit: staged changes contain the real value of $key from .env."
+                FAIL=1
+            fi
+        fi
+    done < .env
+fi
+
+# --- Check 2: generic scheme://user:password@host pattern -----------------
+MATCHES=$(printf '%s' "$STAGED_DIFF" | grep -Eo '[a-zA-Z][a-zA-Z0-9+.-]*://[^:@/[:space:]]+:[^@/[:space:]]+@[^/[:space:]]+' 2>/dev/null)
+if [ -n "$MATCHES" ]; then
+    PLACEHOLDER_RE='^(user|pass|password|fake|test|example|xxx|changeme|admin|secret|placeholder|yourpassword|your_password)$'
+    OLD_IFS=$IFS
+    IFS='
+'
+    for m in $MATCHES; do
+        [ -z "$m" ] && continue
+        cred=$(printf '%s' "$m" | sed -E 's#.*://[^:]+:([^@]+)@.*#\1#')
+        if ! printf '%s' "$cred" | grep -Eiq "$PLACEHOLDER_RE"; then
+            echo "pre-commit: staged changes contain a connection string with an embedded credential: $m"
+            FAIL=1
+        fi
+    done
+    IFS=$OLD_IFS
+fi
+
+if [ "$FAIL" = "1" ]; then
+    echo
+    echo "Refusing to commit. Remove the real secret from staged changes."
+    echo "(If this is a genuine false positive, this hook lives at"
+    echo ".git/hooks/pre-commit and can be bypassed with git commit --no-verify"
+    echo "— only do that if you are certain there is no real secret here.)"
+    exit 1
+fi
+
+exit 0
