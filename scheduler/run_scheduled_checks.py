@@ -337,6 +337,80 @@ def capacity_alert() -> CheckResult:
     return CheckResult(alerts_raised=alerts_raised, skipped_duplicate=skipped_duplicate, detail=detail)
 
 
+REVENUE_MONITORING_MIN_PACE = 0.7
+
+
+@check
+def revenue_monitoring() -> CheckResult:
+    """Tier 1: compares this month's revenue pace (Paid payments so far)
+    against last month's revenue at the same day-of-month checkpoint, so
+    a slow month gets caught while there's still time to act, not only
+    after it's over.
+
+    Fires at most once per calendar day while the shortfall persists."""
+    import calendar
+    from datetime import date
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    this_month_start = today.replace(day=1)
+    if this_month_start.month == 1:
+        last_month_start = this_month_start.replace(year=this_month_start.year - 1, month=12)
+    else:
+        last_month_start = this_month_start.replace(month=this_month_start.month - 1)
+    last_month_days = calendar.monthrange(last_month_start.year, last_month_start.month)[1]
+    checkpoint_day = min(today.day, last_month_days)
+    last_month_checkpoint = last_month_start.replace(day=checkpoint_day)
+
+    payments = list_records("payments")
+
+    def _sum_paid(start: date, end_inclusive: date) -> float:
+        total = 0.0
+        for row in payments:
+            if row.get("status") != "Paid":
+                continue
+            payment_date = row.get("payment_date")
+            if payment_date and start.isoformat() <= payment_date <= end_inclusive.isoformat():
+                total += float(row.get("amount", 0) or 0)
+        return total
+
+    this_month_total = _sum_paid(this_month_start, today)
+    last_month_total_at_checkpoint = _sum_paid(last_month_start, last_month_checkpoint)
+
+    if last_month_total_at_checkpoint <= 0:
+        return CheckResult(
+            detail=f"month-to-date {this_month_total:.0f}; no prior-month baseline to compare"
+        )
+
+    pace = this_month_total / last_month_total_at_checkpoint
+    detail = (
+        f"month-to-date {this_month_total:.0f} vs {last_month_total_at_checkpoint:.0f} "
+        f"at the same point last month ({pace:.0%} of pace)"
+    )
+
+    if pace >= REVENUE_MONITORING_MIN_PACE:
+        return CheckResult(detail=detail)
+
+    raised = raise_owner_alert(
+        "revenue_monitoring",
+        today.isoformat(),
+        title="Revenue is behind last month's pace",
+        message=(
+            f"₹{this_month_total:,.0f} collected so far this month vs "
+            f"₹{last_month_total_at_checkpoint:,.0f} at the same point last "
+            f"month ({pace:.0%} of last month's pace, target is "
+            f"{REVENUE_MONITORING_MIN_PACE:.0%}+)."
+        ),
+        department="Finance",
+    )
+    return CheckResult(
+        alerts_raised=1 if raised else 0,
+        skipped_duplicate=0 if raised else 1,
+        detail=detail,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
