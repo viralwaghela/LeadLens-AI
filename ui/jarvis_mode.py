@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import html
 import random
 
@@ -13,6 +14,13 @@ from services.specialist_orchestration import coordinate_specialists
 from services.platform_data import business_snapshot
 from services.ai import openai_is_configured
 from ui.icons import icon
+
+# Beyond Pain (and every clinic on this deployment so far) operates in
+# India — hardcoded rather than derived from the server's own timezone
+# because the server's is irrelevant here: Streamlit Cloud containers run
+# in UTC regardless of where the clinic actually is, so datetime.now()
+# without a zone was silently showing UTC clock time to an IST audience.
+CLINIC_TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 
 def _money(value):
@@ -158,7 +166,7 @@ def _hero_fragment(owner_name: str) -> None:
     # last click. run_every reruns just this fragment on a timer, not the
     # whole page, so it's cheap even though the rest of Mission Control
     # (metrics, approvals, activity feed) doesn't need the same treatment.
-    now = datetime.now()
+    now = datetime.now(CLINIC_TIMEZONE)
     hour = now.hour
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     st.markdown(
