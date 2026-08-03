@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core.memory import load_company
-from core.auth import render_logout_control
+from core.auth import ROLE_CRM_ONLY, current_role, render_logout_control
 from ui.action_center import show_action_center
 from ui.business_jarvis_suite import (
     show_agent_council,
@@ -157,12 +157,20 @@ def show_dashboard() -> None:
         # the workspace back to the CRM default.
         queried = st.query_params.get("workspace", "").upper()
         st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "CRM"
+    is_crm_only_role = current_role() == ROLE_CRM_ONLY
+    if is_crm_only_role:
+        # Enforced here, not just by hiding the Core switch below — a
+        # receptionist-role session can never resolve to JARVIS mode
+        # regardless of a hand-crafted ?workspace=jarvis URL, since this
+        # overrides whatever was recovered above on every single render.
+        st.session_state["workspace_mode"] = "CRM"
     mode = st.session_state["workspace_mode"]
     apply_workspace_theme(mode)
 
     with st.sidebar:
         _brand(mode)
-        render_workspace_switch()
+        if not is_crm_only_role:
+            render_workspace_switch()
         st.divider()
         if mode == "CRM":
             pages = [
