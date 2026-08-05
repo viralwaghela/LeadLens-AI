@@ -527,6 +527,57 @@ def _pg_atomic_update(mutator):
 # Backend-agnostic public API (unchanged from before)
 # ---------------------------------------------------------------------------
 
+# In-process read cache for load_memory(). Every UI page render calls
+# load_memory() (directly, or indirectly via clinic_data_service, which
+# now shares this same store) several times over — clinic_metrics() alone
+# fans out into 5+ calls, and a patient profile view adds several more per
+# patient — each of which used to be its own fresh network round trip plus
+# a brand-new psycopg2 connection (see _pg_connect: no pooling), which is
+# what actually made pages slow, not any single one of them.
+#
+# Deliberately a plain module-level dict + timestamp rather than
+# st.cache_data: this module has no Streamlit dependency on purpose (see
+# module docstring; scheduler/run_scheduled_checks.py imports it directly
+# as a plain script), so caching has to work identically for both callers.
+#
+# Kept fresh two ways: a short TTL for reads that didn't go through this
+# process's own writes (so a change made from another tab/device still
+# shows up within a couple seconds), and immediate cache replacement on
+# every write this process makes (save_memory / update_memory), so a user
+# always sees their own just-made change instantly rather than waiting
+# out the TTL.
+_read_cache: dict | None = None
+_read_cache_at: float = 0.0
+_read_cache_key: str | None = None
+_READ_CACHE_TTL_SECONDS = 3.0
+
+
+def _cache_identity() -> str:
+    # Which backend is "active" right now. Included so a process that
+    # switches DATABASE_URL/DATABASE_FOLDER mid-run — real code never does
+    # this, but several tests do, to simulate multiple isolated databases
+    # within one test process — can't get served stale data cached under
+    # the previous identity.
+    return _database_url() or str(DATABASE_FOLDER)
+
+
+def _cache_store(memory: dict) -> None:
+    global _read_cache, _read_cache_at, _read_cache_key
+    _read_cache = copy.deepcopy(memory)
+    _read_cache_at = time.time()
+    _read_cache_key = _cache_identity()
+
+
+def _cache_fresh() -> dict | None:
+    if _read_cache is None:
+        return None
+    if _read_cache_key != _cache_identity():
+        return None
+    if (time.time() - _read_cache_at) >= _READ_CACHE_TTL_SECONDS:
+        return None
+    return copy.deepcopy(_read_cache)
+
+
 def ensure_database():
     if _using_postgres():
         _pg_load_raw()
@@ -535,9 +586,13 @@ def ensure_database():
 
 
 def load_memory():
+    cached = _cache_fresh()
+    if cached is not None:
+        return cached
+
     raw = _pg_load_raw() if _using_postgres() else _sqlite_load_raw()
     try:
-        return _row_to_memory(raw)
+        memory = _row_to_memory(raw)
     except (json.JSONDecodeError, ValueError):
         # Corrupt payload: back it up for inspection, then reset cleanly
         # rather than ever crashing the app on a bad row.
@@ -547,9 +602,12 @@ def load_memory():
             backup_path.write_text(raw, encoding="utf-8")
         except OSError:
             pass
-        data = _fresh_default()
-        save_memory(data)
-        return data
+        memory = _fresh_default()
+        save_memory(memory)
+        return memory
+
+    _cache_store(memory)
+    return memory
 
 
 def save_memory(memory):
@@ -558,6 +616,7 @@ def save_memory(memory):
         _pg_save_raw(payload)
     else:
         _sqlite_save_raw(payload)
+    _cache_store(memory)
 
 
 def load_memory_versioned():
@@ -648,8 +707,11 @@ def update_memory(mutator, max_retries=8):
     for attempt in range(max_retries):
         try:
             if _using_postgres():
-                return _pg_atomic_update(mutator)
-            return _sqlite_atomic_update(mutator)
+                result = _pg_atomic_update(mutator)
+            else:
+                result = _sqlite_atomic_update(mutator)
+            _cache_store(result)
+            return result
         except sqlite3.OperationalError as error:
             last_error = error
         except Exception as error:
