@@ -39,20 +39,37 @@ def _log(summary: str, status: str) -> None:
     )
 
 
-def send_appointment_confirmation(appointment: dict[str, Any]) -> dict[str, Any] | None:
-    """Send an immediate WhatsApp confirmation for a just-booked appointment.
-
-    Returns the WhatsApp send result dict, or None if skipped (no consent
-    or no phone on file) — silently, since a missing phone/consent isn't
-    an error, just nothing to send to.
-    """
+def _patient_for_appointment(appointment: dict[str, Any]) -> dict[str, Any] | None:
+    """Shared consent/phone gate for every auto-send in this module.
+    Returns the patient record if it's safe to message them, else None —
+    silently, since a missing phone/consent isn't an error, just nothing
+    to send to."""
     patient = get_record("patients", str(appointment.get("patient_id", "")))
     if not patient:
         return None
     if not bool(patient.get("consent_to_contact", False)):
         return None
-    phone = str(patient.get("phone", "")).strip()
-    if not phone:
+    if not str(patient.get("phone", "")).strip():
+        return None
+    return patient
+
+
+def _send(phone: str, body: str, log_summary: str) -> dict[str, Any]:
+    result = WhatsAppBusinessService().send_text({"to": phone, "body": body})
+    mode = "simulated" if result.status == "simulated" else result.status
+    _log(f"{log_summary} ({mode})", "Completed" if result.success else "Failed")
+    return {
+        "ok": result.success,
+        "status": result.status,
+        "detail": result.detail,
+        "dry_run": result.status == "simulated",
+    }
+
+
+def send_appointment_confirmation(appointment: dict[str, Any]) -> dict[str, Any] | None:
+    """Send an immediate WhatsApp confirmation for a just-booked appointment."""
+    patient = _patient_for_appointment(appointment)
+    if patient is None:
         return None
 
     name = patient.get("name") or "there"
@@ -64,16 +81,35 @@ def send_appointment_confirmation(appointment: dict[str, Any]) -> dict[str, Any]
         f"Hi {name}, your {service} appointment at {clinic} is confirmed for "
         f"{appt_date} at {appt_time}. See you then!"
     )
-
-    result = WhatsAppBusinessService().send_text({"to": phone, "body": body})
-    mode = "simulated" if result.status == "simulated" else result.status
-    _log(
-        f"Sent booking confirmation to {name} for {appt_date} {appt_time} ({mode})",
-        "Completed" if result.success else "Failed",
+    return _send(
+        patient["phone"],
+        body,
+        f"Sent booking confirmation to {name} for {appt_date} {appt_time}",
     )
-    return {
-        "ok": result.success,
-        "status": result.status,
-        "detail": result.detail,
-        "dry_run": result.status == "simulated",
-    }
+
+
+def send_appointment_rsvp_reminder(appointment: dict[str, Any]) -> dict[str, Any] | None:
+    """Send the 24-hours-before RSVP reminder for a Scheduled appointment.
+
+    Asks the patient to confirm or flag a reschedule, rather than just
+    stating the time — this is what distinguishes it from a plain
+    reminder per the founder's request."""
+    patient = _patient_for_appointment(appointment)
+    if patient is None:
+        return None
+
+    name = patient.get("name") or "there"
+    clinic = _clinic_name()
+    appt_date = appointment.get("appointment_date", "")
+    appt_time = appointment.get("appointment_time", "")
+    service = appointment.get("service") or "your session"
+    body = (
+        f"Hi {name}, this is {clinic}. Reminder: your {service} appointment "
+        f"is tomorrow, {appt_date} at {appt_time}. Reply YES to confirm, or "
+        f"let us know if you need to reschedule."
+    )
+    return _send(
+        patient["phone"],
+        body,
+        f"Sent 24hr RSVP reminder to {name} for {appt_date} {appt_time}",
+    )

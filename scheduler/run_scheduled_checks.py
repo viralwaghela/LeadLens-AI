@@ -1,15 +1,16 @@
 """Jarvis's scheduler foundation (Automation Roadmap Phase 0).
 
-Plain Python, no Streamlit dependency. Meant to be triggered on a timer by
-Windows Task Scheduler (hourly to start) rather than run inside the app
-process — see docs/SCHEDULER_SETUP.md for the exact setup steps.
+Plain Python, no Streamlit dependency. Originally meant to be triggered on
+a timer by Windows Task Scheduler — see docs/SCHEDULER_SETUP.md for that
+setup, and see the GitHub Actions workflow (.github/workflows/scheduler.yml)
+for how it actually runs against a cloud deployment, where relying on the
+founder's own PC being on isn't viable once a real client depends on it.
 
 Imports core.memory directly, so every check reads/writes the exact same
 database the running app uses: SQLite locally, or Postgres/Supabase once
-DATABASE_URL is set. (Note: the CRM's own patient/appointment/package
-records live separately, in services.clinic_data_service, which is local
-JSON regardless of DATABASE_URL — checks that need clinic data read from
-there; only the alerts/approvals a check produces are backend-aware.)
+DATABASE_URL is set. The CRM's own patient/appointment/package records
+(services.clinic_data_service) now live in that same store too — they
+used to be local JSON regardless of DATABASE_URL, fixed separately.
 
 Each run executes every registered "check" function. Adding a new
 automation later means writing one function and decorating it with
@@ -69,6 +70,7 @@ class CheckResult:
 
     alerts_raised: int = 0
     approvals_queued: int = 0
+    messages_sent: int = 0
     skipped_duplicate: int = 0
     detail: str = ""
 
@@ -554,10 +556,15 @@ APPOINTMENT_REMINDER_TOLERANCE = timedelta(hours=1)
 
 @check
 def appointment_reminder() -> CheckResult:
-    """Tier 2+ (patient-facing): queues a WhatsApp reminder for patients
-    with a Scheduled appointment coming up in ~24 hours or ~2 hours.
-    Never sends anything itself — only drops a prepared item into the
-    Approval Queue, same as every patient-facing check in this file; a
+    """Reminds patients with a Scheduled appointment coming up in ~24 hours
+    or ~2 hours.
+
+    The 24hr reminder is auto-sent directly as an RSVP-style message (see
+    services.appointment_messaging.send_appointment_rsvp_reminder) — a
+    founder-approved exception to the default approval-gated flow, same
+    reasoning as the instant booking confirmation: low-risk transactional
+    content, not money or clinical. The 2hr reminder is unchanged from
+    before: it only drops a prepared item into the Approval Queue: a
     human still has to approve and execute it from the Action Center UI.
 
     appointment_time isn't validated or format-enforced anywhere in
@@ -566,15 +573,17 @@ def appointment_reminder() -> CheckResult:
     way is skipped rather than guessed at — a reminder with the wrong
     time would be worse than no reminder.
 
-    Each appointment gets at most one 24hr reminder queued and one 2hr
+    Each appointment gets at most one 24hr reminder sent and one 2hr
     reminder queued, ever — not per-day. These are one-time reminders
     tied to a specific appointment, not an ongoing situation like the
     other checks in this file."""
     from datetime import datetime
 
+    from services.appointment_messaging import send_appointment_rsvp_reminder
     from services.clinic_data_service import get_record, list_records
 
     now = datetime.now()
+    sent_count = 0
     queued_count = 0
     skipped_duplicate = 0
     skipped_unparseable = 0
@@ -605,6 +614,21 @@ def appointment_reminder() -> CheckResult:
             if not (lower <= time_until <= upper):
                 continue
 
+            item_key = f"{appointment.get('appointment_id')}:{label}"
+
+            if label == "24hr":
+                if already_flagged("appointment_reminder", item_key):
+                    skipped_duplicate += 1
+                    continue
+                result = send_appointment_rsvp_reminder(appointment)
+                # None means no consent/phone on file — nothing to send,
+                # and not worth tracking as "sent" or retrying every run,
+                # so still mark it flagged either way.
+                _mark_flagged("appointment_reminder", item_key)
+                if result is not None:
+                    sent_count += 1
+                continue
+
             patient = get_record("patients", appointment.get("patient_id"))
             if not patient or not bool(patient.get("consent_to_contact", False)):
                 continue
@@ -612,7 +636,6 @@ def appointment_reminder() -> CheckResult:
             if not phone:
                 continue
 
-            item_key = f"{appointment.get('appointment_id')}:{label}"
             body = (
                 f"Hi {patient.get('name', 'there')}, this is a reminder for your "
                 f"appointment on {raw_date} at {raw_time}"
@@ -637,11 +660,13 @@ def appointment_reminder() -> CheckResult:
                 skipped_duplicate += 1
 
     detail = (
-        f"{queued_count} reminder(s) queued, {skipped_duplicate} already queued, "
+        f"{sent_count} 24hr RSVP reminder(s) sent, {queued_count} 2hr reminder(s) queued, "
+        f"{skipped_duplicate} already handled, "
         f"{skipped_unparseable} appointment(s) with unparseable time"
     )
     return CheckResult(
         approvals_queued=queued_count,
+        messages_sent=sent_count,
         skipped_duplicate=skipped_duplicate,
         detail=detail,
     )
@@ -736,6 +761,7 @@ def _log_run(results: dict[str, CheckResult]) -> None:
         "checks_failed": len(failures),
         "alerts_raised": sum(r.alerts_raised for r in results.values()),
         "approvals_queued": sum(r.approvals_queued for r in results.values()),
+        "messages_sent": sum(r.messages_sent for r in results.values()),
         "skipped_duplicate": sum(r.skipped_duplicate for r in results.values()),
         "failures": failures,
     })
@@ -753,9 +779,9 @@ def main() -> int:
     _log_run(results)
     for name, result in results.items():
         logger.info(
-            "%-32s alerts=%d approvals=%d skipped=%d %s",
+            "%-32s alerts=%d approvals=%d sent=%d skipped=%d %s",
             name, result.alerts_raised, result.approvals_queued,
-            result.skipped_duplicate, result.detail,
+            result.messages_sent, result.skipped_duplicate, result.detail,
         )
     return 1 if any(r.detail.startswith("FAILED") for r in results.values()) else 0
 

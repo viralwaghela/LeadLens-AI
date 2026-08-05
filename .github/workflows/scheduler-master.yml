@@ -1,0 +1,42 @@
+name: Scheduler (master / your own clinic)
+
+# Runs scheduler/run_scheduled_checks.py on a timer against the "master"
+# branch deployment. Streamlit Cloud itself has no background-job support,
+# so this is what actually makes the appointment reminders, low-booking
+# alerts, etc. happen for the live app instead of only existing as code
+# nobody ever runs (see docs/AUTOMATION_ROADMAP.md's original "runs via
+# Windows Task Scheduler" decision — replaced here because a real client
+# can't depend on the founder's own PC staying on).
+#
+# Scheduled workflow triggers are only evaluated from the files present on
+# the repository's default branch, which is why this file (and the
+# client-1 one) both live under master even though the client one runs
+# against different code/secrets.
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # every hour, on the hour, UTC
+  workflow_dispatch: {}  # lets you trigger a run manually from the Actions tab
+
+jobs:
+  run-scheduler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scheduled checks
+        env:
+          DATABASE_URL: ${{ secrets.MASTER_DATABASE_URL }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.MASTER_WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.MASTER_WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_API_VERSION: ${{ secrets.MASTER_WHATSAPP_API_VERSION }}
+        run: python scheduler/run_scheduled_checks.py

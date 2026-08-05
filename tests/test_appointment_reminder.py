@@ -1,6 +1,8 @@
 """Regression test for Phase 1's sixth automation: appointment_reminder.
 
-Patient-facing — must go through the Approval Queue
+The 24hr reminder auto-sends directly (founder-approved exception, see
+services.appointment_messaging) and never touches the Approval Queue. The
+2hr reminder is unchanged: it must still go through the Approval Queue
 (services.integration_manager_v21), never send directly. Runs entirely
 against a temporary local store, never the real database or real
 execution queue.
@@ -73,23 +75,25 @@ def run_tests() -> None:
             ])
 
             result = scheduler.appointment_reminder()
-            assert result.approvals_queued == 2, f"expected 2 reminders queued (24hr + 2hr for P-001), got {result}"
+            assert result.messages_sent == 1, f"expected 1 24hr RSVP auto-sent (P-001 only), got {result}"
+            assert result.approvals_queued == 1, f"expected 1 2hr reminder queued (P-001 only), got {result}"
             assert result.skipped_duplicate == 0
 
             rows = manager.execution_rows()
-            assert len(rows) == 2
-            providers = {row["provider"] for row in rows}
-            assert providers == {"whatsapp"}
-            statuses = {row["status"] for row in rows}
-            assert statuses == {"Awaiting approval"}, "must never auto-send, only queue for approval"
-            recipients = {row["payload"]["to"] for row in rows}
-            assert recipients == {"919999999999"}
+            assert len(rows) == 1, "only the 2hr reminder should reach the Approval Queue"
+            assert rows[0]["provider"] == "whatsapp"
+            assert rows[0]["status"] == "Awaiting approval", "2hr reminder must never auto-send"
+            assert rows[0]["payload"]["to"] == "919999999999"
 
             # --- same appointments, run again: must not duplicate ---------
+            # All 3 patients in the 24hr window (sent, no-consent, no-phone)
+            # get marked flagged on the first pass regardless of outcome, so
+            # all 3 are duplicates now; plus the one already-queued 2hr item.
             result_again = scheduler.appointment_reminder()
+            assert result_again.messages_sent == 0
             assert result_again.approvals_queued == 0
-            assert result_again.skipped_duplicate == 2
-            assert len(manager.execution_rows()) == 2, "must not queue duplicate reminders"
+            assert result_again.skipped_duplicate == 4
+            assert len(manager.execution_rows()) == 1, "must not queue duplicate reminders"
 
             # --- unparseable appointment_time: skipped, not crashed -------
             business_memory.DATABASE_FOLDER = root / "database2"
