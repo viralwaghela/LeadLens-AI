@@ -20,6 +20,7 @@ from services.clinic_data_service import (
     search_records,
     update_record,
 )
+from services.appointment_messaging import send_appointment_confirmation
 from services.security_service import audit_event, mask_sensitive
 
 
@@ -387,7 +388,28 @@ def _show_appointments():
                             "appointment",
                             str(created["appointment_id"]),
                         )
-                        st.success("Appointment saved.")
+                        confirmation = send_appointment_confirmation(created)
+                        if confirmation is None:
+                            st.success(
+                                "Appointment saved. No confirmation sent — "
+                                "patient has no phone on file or hasn't "
+                                "recorded contact consent."
+                            )
+                        elif confirmation["dry_run"]:
+                            st.success(
+                                "Appointment saved. WhatsApp confirmation "
+                                "simulated (no live WhatsApp credentials "
+                                "configured yet)."
+                            )
+                        elif confirmation["ok"]:
+                            st.success(
+                                "Appointment saved and WhatsApp confirmation sent."
+                            )
+                        else:
+                            st.warning(
+                                "Appointment saved, but the WhatsApp "
+                                f"confirmation failed: {confirmation['detail']}"
+                            )
                         st.rerun()
                     except ValueError as error:
                         st.error(str(error))
