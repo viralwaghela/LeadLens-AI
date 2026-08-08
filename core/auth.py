@@ -1,12 +1,21 @@
-"""Password gate for the whole app, with two optional access levels.
+"""Login gate for the whole app, with two optional access levels.
 
-Deliberately simple: shared passwords per deployed instance, kept in
-`.env` / the host's secrets manager, not per-user accounts or real
-multi-tenant login. `APP_PASSWORD` grants full access (CRM + JARVIS).
-`APP_PASSWORD_RECEPTIONIST`, if also set, grants a second password that
-only ever reaches the CRM workspace — dashboard.py forces workspace_mode
-to CRM and hides the Core switch entirely for this role, at the routing
-level, not just by hiding the button (see ROLE_CRM_ONLY usage there).
+Deliberately simple: shared User ID + password pairs per deployed
+instance, kept in `.env` / the host's secrets manager, not per-user
+accounts or real multi-tenant login. `APP_PASSWORD` (with `APP_USER_ID`,
+default "owner") grants full access (CRM + JARVIS). `APP_PASSWORD_
+RECEPTIONIST` (with `APP_USER_ID_RECEPTIONIST`, default "receptionist"),
+if also set, grants a second login that only ever reaches the CRM
+workspace — dashboard.py forces workspace_mode to CRM and hides the Core
+switch entirely for this role, at the routing level, not just by hiding
+the button (see ROLE_CRM_ONLY usage there).
+
+The User ID is a plain configured string per deployment (e.g. the
+clinic's name or the doctor's name), not a real username/account system
+— it exists so each client's login screen looks like theirs and so the
+login isn't "just a password box," not to support multiple distinct
+users. No SSO/OAuth by design; the founder explicitly wants a plain
+User ID + password screen.
 
 If APP_PASSWORD is left unset, the gate is skipped entirely (so local
 development still works with zero setup) but a loud on-screen warning is
@@ -44,6 +53,14 @@ def _configured_receptionist_password() -> str:
     if not _configured_password():
         return ""
     return os.getenv("APP_PASSWORD_RECEPTIONIST", "").strip()
+
+
+def _configured_user_id() -> str:
+    return os.getenv("APP_USER_ID", "").strip() or "owner"
+
+
+def _configured_receptionist_user_id() -> str:
+    return os.getenv("APP_USER_ID_RECEPTIONIST", "").strip() or "receptionist"
 
 
 def current_role() -> str:
@@ -127,32 +144,41 @@ def require_login() -> bool:
             st.session_state[ROLE_KEY] = role
             return True
 
+    user_id = _configured_user_id()
+    receptionist_user_id = _configured_receptionist_user_id()
+
     st.markdown(
         "<div style='max-width:420px;margin:8rem auto 0;text-align:center'>"
         "<h2>🔒 LeadLens CareOS</h2>"
-        "<p style='opacity:.7'>Enter the access password to continue.</p>"
+        "<p style='opacity:.7'>Enter your User ID and password to continue.</p>"
         "</div>",
         unsafe_allow_html=True,
     )
     _, center, _ = st.columns([1, 1.4, 1])
     with center:
         with st.form("login_form"):
-            entered = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Password")
+            entered_id = st.text_input("User ID", placeholder="User ID")
+            entered_password = st.text_input("Password", type="password", placeholder="Password")
             submitted = st.form_submit_button("Unlock", use_container_width=True, type="primary")
         if submitted:
-            entered_clean = entered.strip()
-            if hmac.compare_digest(entered_clean, password):
+            entered_id_clean = entered_id.strip().lower()
+            entered_password_clean = entered_password.strip()
+            if entered_id_clean == user_id.lower() and hmac.compare_digest(
+                entered_password_clean, password
+            ):
                 st.session_state[SESSION_KEY] = True
                 st.session_state[ROLE_KEY] = ROLE_FULL
                 st.rerun()
-            elif receptionist_password and hmac.compare_digest(
-                entered_clean, receptionist_password
+            elif (
+                receptionist_password
+                and entered_id_clean == receptionist_user_id.lower()
+                and hmac.compare_digest(entered_password_clean, receptionist_password)
             ):
                 st.session_state[SESSION_KEY] = True
                 st.session_state[ROLE_KEY] = ROLE_CRM_ONLY
                 st.rerun()
             else:
-                st.error("Incorrect password.")
+                st.error("Incorrect User ID or password.")
     return False
 
 
