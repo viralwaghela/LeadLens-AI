@@ -4,30 +4,31 @@ Build order for turning Jarvis's automations from "Jarvis can answer if asked"
 into "Jarvis checks and acts on his own." Build and test each phase fully
 before starting the next one — do not jump ahead.
 
-## Decision already made
-Scheduler runs locally via Windows Task Scheduler for now (free, matches
-current hosting). Revisit only once there are paying customers who need
-uptime independent of the founder's own PC being on.
+## Decision already made (superseded)
+This originally said the scheduler runs locally via Windows Task
+Scheduler. That's no longer true — real paying clients need uptime
+independent of the founder's PC, so the scheduler now runs on a timer via
+GitHub Actions (`.github/workflows/scheduler-master.yml`,
+`scheduler-client-1.yml`), one workflow per client deployment. See
+`docs/NEW_CLIENT_ONBOARDING.md` for wiring up a new client's workflow.
 
-## Known gap — clinic data isn't in Postgres yet
-`core/memory.py` (company profile, tasks, approvals, decisions, reports)
-already moves to Postgres/Supabase whenever `DATABASE_URL` is set. But the
-actual CRM data every automation needs to read — patients, appointments,
-packages, payments, therapists — lives in `services/clinic_data_service.py`,
-which is local JSON at `data/pilot/*.json` regardless of `DATABASE_URL`.
-It does not move with the rest of the app's storage.
+## Known gap — resolved
+This section used to say clinic data (patients, appointments, packages,
+payments, therapists) lived in local JSON at `data/pilot/*.json`
+regardless of `DATABASE_URL`, separately from `core/memory.py`'s
+Postgres/SQLite backend. That migration happened — `clinic_data_service.py`
+now reads and writes through `core/memory.py` like everything else, so
+clinic data has the same durability as the rest of the app's storage.
 
-This is fine for now (single founder, single machine, matches the
-"scheduler runs locally" decision above), but it means:
-- Automations built in this roadmap only get Postgres durability for the
-  alerts/approvals they produce, not for the underlying clinic data they
-  read.
-- This must be closed — either by moving `clinic_data_service` onto the
-  same `DATABASE_URL`-aware backend as `core/memory.py`, or a deliberate
-  replacement — before any real deployment off the founder's own PC, and
-  before onboarding a second clinic (see CLAUDE.md's multi-tenancy gap;
-  these are related but not the same problem — this one blocks even a
-  single clinic's data from surviving a redeploy).
+A related, more recently discovered issue: `services/jarvis_context.py`
+(what every automation's and every Jarvis chat answer's business
+grounding is built from) had its own, separate read path that was never
+updated when the above migration happened — it kept reading the same now-
+nonexistent `data/pilot/*.json` files. Fixed 2026-08-09; clinic-derived
+signals (renewals due, patient inactivity, capacity risk, etc.) were
+silently always empty before that fix. Worth remembering if a future
+migration changes where clinic data lives again: check every read path,
+not just the obvious write path.
 
 ## Phase 0 — Scheduler foundation (build first, blocks every other phase)
 Create `scheduler/run_scheduled_checks.py`:
