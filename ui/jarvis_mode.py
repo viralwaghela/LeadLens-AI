@@ -365,7 +365,13 @@ def show_jarvis_mode():
 
     st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
 
-    # ---- Conversation history (kept above the sticky input) ---------------
+    # ---- Conversation history --------------------------------------------
+    # Deliberately st.text_input in a form, not st.chat_input: chat_input
+    # renders as a floating bottom bar and auto-focuses on every load, which
+    # made the browser auto-scroll straight past the hero/greeting to the
+    # bottom of the page every single time Jarvis mode opened. A plain
+    # in-flow input has none of that — the page now opens exactly where it
+    # rendered, on the greeting, not scrolled anywhere.
     if "jarvis_messages" not in st.session_state:
         st.session_state["jarvis_messages"] = [{"role": "assistant", "content": "I am online. Ask me about today's priorities, revenue, patient follow-ups, therapist workload, approvals, or a complete action plan."}]
     with st.expander("Conversation with Jarvis", expanded=len(st.session_state["jarvis_messages"]) > 1):
@@ -373,8 +379,11 @@ def show_jarvis_mode():
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-    prompt = st.chat_input("Ask Jarvis anything...")
-    if prompt:
+    with st.form("jarvis_ask_form", clear_on_submit=True):
+        ask_col, submit_col = st.columns([5, 1])
+        prompt = ask_col.text_input("Ask Jarvis anything...", label_visibility="collapsed", placeholder="Ask Jarvis anything...")
+        asked = submit_col.form_submit_button("Ask", type="primary", use_container_width=True)
+    if asked and prompt:
         st.session_state["jarvis_messages"].append({"role": "user", "content": prompt})
         with st.spinner("Coordinating the AI team..."):
             result = coordinate_specialists(prompt, conversation_history=st.session_state["jarvis_messages"][:-1])
