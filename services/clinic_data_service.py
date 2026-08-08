@@ -46,6 +46,15 @@ CORPORATE_CLIENT_STATUSES = {
     "Lost",
     "Archived",
 }
+LEAD_STATUSES = {
+    "New",
+    "Contacted",
+    "Booked",
+    "Converted",
+    "Lost",
+    "Archived",
+}
+LEAD_SOURCES = {"Website", "Phone", "Walk-in", "Referral", "Other"}
 
 
 def _now() -> str:
@@ -340,6 +349,26 @@ def _validate_record(
         if not partial or "status" in row:
             row["status"] = _validate_status(
                 row.get("status"), CORPORATE_CLIENT_STATUSES, "New"
+            )
+
+    elif entity == "leads":
+        if not partial or "name" in row:
+            row["name"] = _clean_text(row.get("name"))
+            if not row["name"]:
+                raise ValueError("Lead name is required.")
+        if "phone" in row:
+            row["phone"] = _clean_text(row.get("phone"))
+        if "email" in row:
+            row["email"] = _clean_text(row.get("email"))
+        if "message" in row:
+            row["message"] = _clean_text(row.get("message"))
+        if not partial or "source" in row:
+            row["source"] = _validate_status(
+                row.get("source"), LEAD_SOURCES, "Other"
+            )
+        if not partial or "status" in row:
+            row["status"] = _validate_status(
+                row.get("status"), LEAD_STATUSES, "New"
             )
 
     return row

@@ -23,6 +23,7 @@ from ui.patient_crm import (
     show_appointments_page,
     show_corporate_leads_page,
     show_crm_insights,
+    show_leads_page,
     show_patient_directory,
     show_payments_page,
     show_team_page,
@@ -176,6 +177,7 @@ def show_dashboard() -> None:
         if mode == "CRM":
             pages = [
                 "Patients",
+                "Leads",
                 "Appointments",
                 "Treatments & Plans",
                 "Corporate Leads",
@@ -224,6 +226,7 @@ def show_dashboard() -> None:
     if mode == "CRM":
         routes = {
             "Patients": show_patient_directory,
+            "Leads": show_leads_page,
             "Appointments": show_appointments_page,
             "Treatments & Plans": show_treatment_plans,
             "Corporate Leads": show_corporate_leads_page,

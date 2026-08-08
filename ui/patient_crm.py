@@ -7,6 +7,8 @@ import streamlit as st
 from services.clinic_data_service import (
     APPOINTMENT_STATUSES,
     CORPORATE_CLIENT_STATUSES,
+    LEAD_SOURCES,
+    LEAD_STATUSES,
     PACKAGE_STATUSES,
     PATIENT_STATUSES,
     PAYMENT_STATUSES,
@@ -944,6 +946,100 @@ def _show_corporate_leads():
                     st.rerun()
 
 
+def _show_leads():
+    rows = list_records("leads")
+    if rows:
+        st.dataframe(
+            [
+                {
+                    "Name": row.get("name", ""),
+                    "Phone": row.get("phone", ""),
+                    "Email": row.get("email", ""),
+                    "Source": row.get("source", ""),
+                    "Status": row.get("status", ""),
+                    "Received": row.get("created_at", ""),
+                }
+                for row in rows
+            ],
+            use_container_width=True,
+        )
+    else:
+        st.info(
+            "No leads yet. Website enquiries land here automatically once "
+            "the marketing site's booking form is connected."
+        )
+
+    create, update = st.tabs(["Add lead", "Update lead"])
+    with create:
+        with st.form("create_lead", clear_on_submit=True):
+            name = st.text_input("Name *")
+            phone = st.text_input("Phone")
+            email = st.text_input("Email")
+            source = st.selectbox("Source", sorted(LEAD_SOURCES))
+            message = st.text_area(
+                "Message",
+                placeholder="What they're asking about, how they found us, etc.",
+            )
+            if st.form_submit_button("Add lead", type="primary"):
+                try:
+                    created = add_record(
+                        "leads",
+                        {
+                            "name": name,
+                            "phone": phone,
+                            "email": email,
+                            "source": source,
+                            "message": message,
+                            "status": "New",
+                        },
+                    )
+                    audit_event(
+                        "local-owner",
+                        "create",
+                        "lead",
+                        str(created["lead_id"]),
+                    )
+                    st.success("Lead added.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+    with update:
+        if not rows:
+            st.info("There is no lead to update.")
+        else:
+            choices = {
+                f"{row.get('name', 'Unknown')} · {row.get('lead_id', '')}": row
+                for row in rows
+            }
+            selected = st.selectbox("Lead", list(choices))
+            lead = choices[selected]
+            statuses = sorted(LEAD_STATUSES - {"Archived"})
+            if lead.get("message"):
+                st.caption(f"Message: {lead['message']}")
+            with st.form("update_lead"):
+                status = st.selectbox(
+                    "Status",
+                    statuses,
+                    index=statuses.index(lead.get("status"))
+                    if lead.get("status") in statuses
+                    else 0,
+                )
+                if st.form_submit_button("Update lead"):
+                    update_record(
+                        "leads",
+                        str(lead["lead_id"]),
+                        {"status": status},
+                    )
+                    audit_event(
+                        "local-owner",
+                        "update",
+                        "lead",
+                        str(lead["lead_id"]),
+                    )
+                    st.success("Lead updated.")
+                    st.rerun()
+
+
 def show_patient_crm():
     st.markdown(
         '<div class="eyebrow">PATIENT RELATIONSHIP OPERATIONS</div>',
@@ -1048,6 +1144,19 @@ def show_corporate_leads_page():
         "it yourself."
     )
     _show_corporate_leads()
+
+
+def show_leads_page():
+    st.markdown(
+        '<div class="eyebrow">CRM · LEADS</div>',
+        unsafe_allow_html=True,
+    )
+    st.title("Leads")
+    st.caption(
+        "Individual enquiries — from the website, phone, walk-ins or "
+        "referrals. Convert a promising lead into a patient once they book."
+    )
+    _show_leads()
 
 
 def show_crm_insights():
