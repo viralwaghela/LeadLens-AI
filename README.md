@@ -127,9 +127,15 @@ filesystem (see the note in `.env.example`).
 
 1. Push this repo to GitHub.
 2. Create a new app pointing at `app.py`.
-3. In the app's **Secrets**, set `OPENAI_API_KEY`, `APP_PASSWORD`, and
-   `DATABASE_URL` (required here — the platform's filesystem is
-   ephemeral, so local SQLite will not persist between restarts).
+3. In the app's **Secrets**, set `OPENAI_API_KEY`, `APP_USER_ID`,
+   `APP_PASSWORD`, and `DATABASE_URL` (required here — the platform's
+   filesystem is ephemeral, so local SQLite will not persist between
+   restarts).
+
+Onboarding an additional client onto their own separate deployment (own
+branch, own database, own app)? See
+[`docs/NEW_CLIENT_ONBOARDING.md`](docs/NEW_CLIENT_ONBOARDING.md) instead
+of repeating these steps from scratch each time.
 
 ### Render / Railway
 
