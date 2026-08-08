@@ -178,7 +178,7 @@ def _hero_fragment(owner_name: str) -> None:
                 <div class="jarvis-orb">✦</div>
                 <div>
                     <h1>{greeting}, {_esc(owner_name)}.</h1>
-                    <p>I've reviewed your clinic's operations. The business pulse, AI team and approval queue are ready.</p>
+                    <p>I've been keeping an eye on things — here's where the clinic stands, and what needs you.</p>
                 </div>
             </div>
             <div class="jv-hero-chips">
