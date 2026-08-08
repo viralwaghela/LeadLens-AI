@@ -18,6 +18,7 @@ ENTITY_META = {
     "patients": ("clinic_patients", "patient_id", "P"),
     "appointments": ("clinic_appointments", "appointment_id", "A"),
     "packages": ("clinic_packages", "package_id", "PKG"),
+    "package_templates": ("clinic_package_templates", "template_id", "PKGT"),
     "payments": ("clinic_payments", "payment_id", "PAY"),
     "therapists": ("clinic_therapists", "therapist_id", "T"),
     "progress_notes": ("clinic_progress_notes", "progress_id", "PRG"),
@@ -26,6 +27,7 @@ ENTITY_META = {
 }
 
 PATIENT_STATUSES = {"Active", "Inactive", "Renewal Due", "Archived"}
+PACKAGE_TEMPLATE_STATUSES = {"Active", "Archived"}
 APPOINTMENT_STATUSES = {
     "Scheduled",
     "Completed",
@@ -235,6 +237,24 @@ def _validate_record(
         if not partial or "status" in row:
             row["status"] = _validate_status(
                 row.get("status"), PACKAGE_STATUSES, "Active"
+            )
+
+    elif entity == "package_templates":
+        if not partial or "name" in row:
+            row["name"] = _clean_text(row.get("name"))
+            if not row["name"]:
+                raise ValueError("Package name is required.")
+        if "total_sessions" in row:
+            row["total_sessions"] = int(
+                _non_negative_number(row.get("total_sessions"), "Total sessions")
+            )
+        if "price" in row:
+            row["price"] = _non_negative_number(row.get("price"), "Price")
+        if "description" in row:
+            row["description"] = _clean_text(row.get("description"))
+        if not partial or "status" in row:
+            row["status"] = _validate_status(
+                row.get("status"), PACKAGE_TEMPLATE_STATUSES, "Active"
             )
 
     elif entity == "payments":

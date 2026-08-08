@@ -453,6 +453,79 @@ def _show_appointments():
                     st.rerun()
 
 
+def _show_package_catalog():
+    st.caption(
+        "Define reusable classes/packages here (e.g. Zumba, Yoga, a "
+        "10-session physio package) so assigning one to a patient is a "
+        "quick pick instead of retyping the name, sessions and price "
+        "every time. Price here is a reference for staff — record the "
+        "actual payment received under Payments as before."
+    )
+    templates = list_records("package_templates")
+    if templates:
+        st.dataframe(
+            [
+                {
+                    "Name": row.get("name", ""),
+                    "Default sessions": row.get("total_sessions", ""),
+                    "Reference price": _money(row.get("price", 0)),
+                    "Description": row.get("description", ""),
+                    "Status": row.get("status", ""),
+                }
+                for row in templates
+            ],
+            use_container_width=True,
+        )
+    else:
+        st.info("No saved packages yet — add one below.")
+
+    with st.form("create_package_template", clear_on_submit=True):
+        name = st.text_input("Package/class name *", placeholder="e.g. Zumba")
+        total = st.number_input(
+            "Default total sessions", min_value=1, value=10, step=1
+        )
+        price = st.number_input(
+            "Reference price (₹)", min_value=0.0, value=0.0, step=500.0
+        )
+        description = st.text_area("Description", placeholder="Optional")
+        if st.form_submit_button("Save to catalog", type="primary"):
+            try:
+                created = add_record(
+                    "package_templates",
+                    {
+                        "name": name,
+                        "total_sessions": total,
+                        "price": price,
+                        "description": description,
+                        "status": "Active",
+                    },
+                )
+                audit_event(
+                    "local-owner",
+                    "create",
+                    "package_template",
+                    str(created["template_id"]),
+                )
+                st.success("Saved to catalog.")
+                st.rerun()
+            except ValueError as error:
+                st.error(str(error))
+
+    active_templates = [t for t in templates if t.get("status") == "Active"]
+    if active_templates:
+        st.divider()
+        st.markdown("**Archive a saved package**")
+        choices = {t["name"]: t for t in active_templates}
+        selected_name = st.selectbox(
+            "Package", list(choices), key="archive_template_pick"
+        )
+        if st.button("Archive", key="archive_template_btn"):
+            template = choices[selected_name]
+            archive_record("package_templates", str(template["template_id"]))
+            st.success(f"{selected_name} archived.")
+            st.rerun()
+
+
 def _show_packages():
     patient_map, patient_labels = _options("patients", "patient_id")
     rows = records_with_patient_names("packages")
@@ -461,19 +534,63 @@ def _show_packages():
     else:
         st.info("No packages have been recorded.")
 
-    create, update = st.tabs(["Assign package", "Update package"])
+    create, update, catalog = st.tabs(
+        ["Assign package", "Update package", "Package catalog"]
+    )
     with create:
         if not patient_labels:
             st.warning("Create a patient before assigning a package.")
         else:
+            active_templates = [
+                row for row in list_records("package_templates")
+                if row.get("status") == "Active"
+            ]
+            template_map = {row["name"]: row for row in active_templates}
+            template_choice = st.selectbox(
+                "Use a saved package (optional)",
+                ["— Custom —"] + list(template_map),
+                key="package_template_pick",
+                help="Pick a class/package from the catalog to pre-fill "
+                "the name and session count below, or leave as Custom "
+                "to type your own.",
+            )
+            picked = template_map.get(template_choice)
+            if picked:
+                st.caption(f"Reference price: {_money(picked.get('price', 0))}")
+
+            # Widget keys deliberately include template_choice: st.text_input /
+            # st.number_input's value= parameter only initializes the widget
+            # on its very first render — once a widget's key already has an
+            # entry in st.session_state, later reruns keep whatever the user
+            # (or a previous pre-fill) left there and silently ignore a new
+            # value=. Tying the key to the current catalog pick makes
+            # switching templates count as a genuinely new widget instance,
+            # so it re-initializes with the new template's values instead of
+            # keeping stale ones (verified live: without this, picking a
+            # template correctly updated its own caption but left the name
+            # field blank).
+            field_suffix = template_choice
             with st.form("create_package", clear_on_submit=True):
                 patient_label = st.selectbox("Patient *", patient_labels)
-                name = st.text_input("Package name *")
+                name = st.text_input(
+                    "Package name *",
+                    value=picked["name"] if picked else "",
+                    key=f"package_name_{field_suffix}",
+                )
+                default_sessions = int(picked["total_sessions"]) if picked else 10
                 total = st.number_input(
-                    "Total sessions", min_value=1, value=10, step=1
+                    "Total sessions",
+                    min_value=1,
+                    value=default_sessions,
+                    step=1,
+                    key=f"package_total_{field_suffix}",
                 )
                 remaining = st.number_input(
-                    "Sessions remaining", min_value=0, value=10, step=1
+                    "Sessions remaining",
+                    min_value=0,
+                    value=default_sessions,
+                    step=1,
+                    key=f"package_remaining_{field_suffix}",
                 )
                 start_date = st.date_input("Start date", value=date.today())
                 has_expiry = st.checkbox("Record an expiry date")
@@ -509,6 +626,8 @@ def _show_packages():
                         st.rerun()
                     except ValueError as error:
                         st.error(str(error))
+    with catalog:
+        _show_package_catalog()
     with update:
         packages = list_records("packages")
         if not packages:

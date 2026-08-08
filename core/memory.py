@@ -85,6 +85,7 @@ DEFAULT_MEMORY = {
     "clinic_patients": [],
     "clinic_appointments": [],
     "clinic_packages": [],
+    "clinic_package_templates": [],
     "clinic_payments": [],
     "clinic_therapists": [],
     "clinic_progress_notes": [],
