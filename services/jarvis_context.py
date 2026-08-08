@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from core.memory import load_memory
+from services.clinic_data_service import list_records as _list_clinic_records
 from services.jarvis_memory import relevant_memory
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PILOT_DATA = ROOT / "data" / "pilot"
 LEARNING_FILE = ROOT / "data" / "learning" / "learning_memory.json"
 MEMORY_FILE = ROOT / "database" / "company.json"
 
@@ -257,9 +257,17 @@ def build_jarvis_context(query: str = "") -> dict[str, Any]:
         "leads",
         "corporate_clients",
     ):
-        path = PILOT_DATA / f"{entity}.json"
-        payload, error = _read_json(path, [])
-        rows = payload if isinstance(payload, list) else []
+        # Used to read data/pilot/{entity}.json, a leftover from before
+        # clinic_data_service.py was migrated onto core.memory (Postgres/
+        # SQLite) — that directory doesn't exist in this deployment, so
+        # every clinic collection here was silently empty, always. Read
+        # from the same store the CRM actually writes to instead.
+        try:
+            rows = _list_clinic_records(entity)
+            error = None
+        except Exception as exc:  # pragma: no cover - defensive only
+            rows = []
+            error = str(exc)
         collections[entity] = [
             row for row in rows if isinstance(row, dict)
         ]
@@ -267,7 +275,7 @@ def build_jarvis_context(query: str = "") -> dict[str, Any]:
             "source": f"clinic.{entity}",
             "loaded": error is None,
             "records": len(collections[entity]),
-            "updated_at": _modified_at(path),
+            "updated_at": None,
         })
         if error:
             unavailable.append(f"clinic.{entity}: {error}")
@@ -307,7 +315,29 @@ def build_jarvis_context(query: str = "") -> dict[str, Any]:
         "updated_at": _modified_at(MEMORY_FILE),
     })
 
-    revenue = _number(company.get("monthly_revenue"))
+    # Prefer real Payments records over the manually-typed company profile
+    # field, which otherwise silently drifts from what's actually recorded
+    # in the CRM (see clinic_data_service.py). Only fall back to the manual
+    # figure when the clinic has never recorded a payment at all — a brand
+    # new setup, or a non-clinic business that isn't using Payments.
+    clinic_payments = collections["payments"]
+    if clinic_payments:
+        today = date.today()
+        clinic_revenue = 0.0
+        for row in clinic_payments:
+            if str(row.get("status", "")).strip().lower() != "paid":
+                continue
+            try:
+                payment_date = date.fromisoformat(str(row.get("payment_date", "") or ""))
+            except ValueError:
+                continue
+            if payment_date.year == today.year and payment_date.month == today.month:
+                clinic_revenue += _number(row.get("amount"))
+        revenue = round(clinic_revenue, 2)
+        revenue_source = "clinic.payments"
+    else:
+        revenue = _number(company.get("monthly_revenue"))
+        revenue_source = "business.memory"
     expenses = _number(company.get("monthly_expenses"))
     profit = revenue - expenses
     margin = (profit / revenue * 100) if revenue else 0.0
@@ -393,8 +423,14 @@ def build_jarvis_context(query: str = "") -> dict[str, Any]:
                 **safe_company,
             },
             "financial_snapshot": {
-                "_source": "business.memory",
+                "_source": revenue_source,
                 "monthly_revenue": revenue,
+                "monthly_revenue_note": (
+                    "Sum of this calendar month's Paid clinic payments."
+                    if revenue_source == "clinic.payments"
+                    else "No clinic payment records exist yet; this is the "
+                    "manually-entered company profile figure, which may be stale."
+                ),
                 "monthly_expenses": expenses,
                 "estimated_profit": profit,
                 "operating_margin_percent": round(margin, 1),
