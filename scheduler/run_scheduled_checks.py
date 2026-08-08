@@ -736,6 +736,90 @@ def waiting_list_automation() -> CheckResult:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 checks (docs/AUTOMATION_ROADMAP.md) — patient-facing, tone-
+# sensitive. Every Phase 2 check uses queue_patient_action, never sends
+# directly: a human always approves and executes from the Action Center UI.
+# The Phase 1 24hr-reminder/booking-confirmation auto-send exception was a
+# specific, one-time founder decision for that content only — it does not
+# extend to anything built here.
+# ---------------------------------------------------------------------------
+
+
+@check
+def birthday_automation() -> CheckResult:
+    """Tier 2: queues a birthday WhatsApp message for any consented patient
+    whose recorded date_of_birth falls today (month and day match; the
+    year is only used for age, never for matching).
+
+    date_of_birth is an optional patient field (services.clinic_data_service)
+    — a patient with nothing recorded is silently skipped, not flagged as
+    missing data; birthdays are exactly the kind of thing clinics often
+    don't collect at intake, and that's fine.
+
+    Fires at most once per patient per calendar year (item_key includes
+    the year), so re-running hourly through the day doesn't queue
+    duplicates, and the same patient gets a fresh queued item next year."""
+    from datetime import date
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_contact = 0
+
+    for patient in list_records("patients"):
+        dob_text = str(patient.get("date_of_birth", "") or "").strip()
+        if not dob_text:
+            continue
+        try:
+            dob = date.fromisoformat(dob_text)
+        except ValueError:
+            continue
+        if (dob.month, dob.day) != (today.month, today.day):
+            continue
+        if not bool(patient.get("consent_to_contact", False)):
+            skipped_no_contact += 1
+            continue
+        phone = str(patient.get("phone", "")).strip()
+        if not phone:
+            skipped_no_contact += 1
+            continue
+
+        name = patient.get("name") or "there"
+        item = queue_patient_action(
+            "birthday_automation",
+            f"{patient.get('patient_id')}:{today.year}",
+            provider="whatsapp",
+            action="send_text",
+            payload={
+                "to": phone,
+                "body": (
+                    f"Happy birthday, {name}! Wishing you health and "
+                    "happiness from everyone at the clinic."
+                ),
+            },
+            title=f"Birthday message — {name}",
+            impact="Goodwill message, not a sales or money conversation.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} birthday message(s) queued, "
+        f"{skipped_duplicate} already handled this year, "
+        f"{skipped_no_contact} skipped (no consent or phone on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 

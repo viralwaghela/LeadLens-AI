@@ -162,6 +162,10 @@ def _validate_record(
             )
         if "last_visit" in row:
             row["last_visit"] = _clean_date(row.get("last_visit"), "Last visit")
+        if "date_of_birth" in row:
+            row["date_of_birth"] = _clean_date(
+                row.get("date_of_birth"), "Date of birth"
+            )
         if "sessions_remaining" in row:
             row["sessions_remaining"] = int(
                 _non_negative_number(

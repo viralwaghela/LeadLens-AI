@@ -64,6 +64,7 @@ def _show_patient_profile(patient_id):
         "**Permission to contact:** "
         + ("Recorded" if patient.get("consent_to_contact") else "Not recorded")
     )
+    st.write(f"**Date of birth:** {patient.get('date_of_birth') or 'Not recorded'}")
 
     progress, appointments, packages, payments, edit = st.tabs(
         ["Progress", "Appointments", "Packages", "Payments", "Edit"]
@@ -206,6 +207,18 @@ def _show_patient_profile(patient_id):
                 "Permission to contact recorded",
                 value=bool(patient.get("consent_to_contact", False)),
             )
+            existing_dob = patient.get("date_of_birth") or ""
+            try:
+                dob_default = date.fromisoformat(existing_dob) if existing_dob else None
+            except ValueError:
+                dob_default = None
+            date_of_birth = st.date_input(
+                "Date of birth",
+                value=dob_default,
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                format="YYYY-MM-DD",
+            )
             if st.form_submit_button("Save patient changes", type="primary"):
                 try:
                     update_record(
@@ -217,6 +230,9 @@ def _show_patient_profile(patient_id):
                             "email": email,
                             "status": status,
                             "consent_to_contact": consent,
+                            "date_of_birth": date_of_birth.isoformat()
+                            if date_of_birth
+                            else "",
                         },
                     )
                     audit_event(
@@ -308,6 +324,13 @@ def _show_patients():
                 "Status", sorted(PATIENT_STATUSES - {"Archived"})
             )
             consent = st.checkbox("Permission to contact recorded")
+            date_of_birth = st.date_input(
+                "Date of birth",
+                value=None,
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                format="YYYY-MM-DD",
+            )
             if st.form_submit_button("Create patient", type="primary"):
                 try:
                     created = add_record(
@@ -319,6 +342,9 @@ def _show_patients():
                             "status": status,
                             "consent_to_contact": consent,
                             "sessions_remaining": 0,
+                            "date_of_birth": date_of_birth.isoformat()
+                            if date_of_birth
+                            else "",
                         },
                     )
                     audit_event(
