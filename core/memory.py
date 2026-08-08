@@ -91,6 +91,12 @@ DEFAULT_MEMORY = {
     "clinic_progress_notes": [],
     "clinic_leads": [],
     "clinic_corporate_clients": [],
+    # Audit trail (services/security_service.py). Used to live in a local
+    # JSON file under data/security/, which meant every recorded action was
+    # silently lost on the next redeploy/restart on an ephemeral filesystem
+    # (Streamlit Cloud included) — the same durability bug already fixed
+    # for the clinic CRM entities above.
+    "security_audit_log": [],
 }
 
 
