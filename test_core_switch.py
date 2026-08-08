@@ -20,7 +20,7 @@ st.set_page_config(page_title="Core switch harness", layout="wide")
 
 if "workspace_mode" not in st.session_state:
     queried = st.query_params.get("workspace", "").upper()
-    st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "CRM"
+    st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "JARVIS"
 mode = st.session_state["workspace_mode"]
 apply_workspace_theme(mode)
 
