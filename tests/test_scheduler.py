@@ -18,7 +18,6 @@ import scheduler.run_scheduled_checks as scheduler
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_queue = manager.QUEUE
     original_checks = list(scheduler.CHECKS)
     original_database_url = os.environ.pop("DATABASE_URL", None)
 
@@ -26,7 +25,6 @@ def run_tests() -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            manager.QUEUE = root / "execution_queue.json"
             scheduler.CHECKS.clear()
 
             # --- registry -----------------------------------------------
@@ -124,7 +122,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        manager.QUEUE = original_queue
         scheduler.CHECKS.clear()
         scheduler.CHECKS.extend(original_checks)
         if original_database_url is not None:

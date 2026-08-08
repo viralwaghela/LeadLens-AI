@@ -84,8 +84,9 @@ A subset of `tests/` (scheduler and automation checks — `test_scheduler.py`,
 `test_birthday_automation.py`, `test_google_review_automation.py`,
 `test_missed_appointment_recovery.py`, `test_inactive_patient_recovery.py`,
 `test_new_patient_recovery.py`, `test_corporate_lead_automation.py`,
-`test_therapist_schedule_optimizer.py`, `TEST_PHASES_21_TO_23.py`) are
-standalone scripts rather than pytest functions. Run each directly from
+`test_therapist_schedule_optimizer.py`, `test_approval_actions.py`,
+`TEST_PHASES_21_TO_23.py`) are standalone scripts rather than pytest
+functions. Run each directly from
 the project root with the root on `PYTHONPATH`:
 
 ```powershell

@@ -97,6 +97,14 @@ DEFAULT_MEMORY = {
     # (Streamlit Cloud included) — the same durability bug already fixed
     # for the clinic CRM entities above.
     "security_audit_log": [],
+    # Approval-gated action queue (services/integration_manager_v21.py).
+    # Used to live in a local JSON file under data/integrations/ — the
+    # same durability bug as above, but with a worse consequence here:
+    # the scheduler (running via GitHub Actions, a separate machine from
+    # the live app's container) wrote to its own throwaway copy of that
+    # file, so nothing it ever queued could reach the live app's Approval
+    # Queue at all. Found and fixed 2026-08-09.
+    "execution_queue": [],
 }
 
 

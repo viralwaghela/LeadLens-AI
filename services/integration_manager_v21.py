@@ -9,11 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
-import tempfile
-import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -21,17 +17,13 @@ from core.memory import (
     add_memory_entry,
     load_memory,
     update_approval_status,
+    update_memory,
 )
 from integrations.calendar_service import GoogleCalendarService
 from integrations.gmail_service import GmailService
 from integrations.whatsapp_service import WhatsAppBusinessService
 from services.jarvis_memory import record_action_execution
 from services.security_service import audit_event
-
-ROOT = Path(__file__).resolve().parents[1]
-QUEUE = ROOT / "data" / "integrations" / "execution_queue.json"
-QUEUE.parent.mkdir(parents=True, exist_ok=True)
-_LOCK = threading.RLock()
 
 ALLOWED_ACTIONS = {
     "calendar": {"create_event"},
@@ -49,38 +41,16 @@ def _clean(value: Any, limit: int = 4000) -> str:
 
 
 def _load() -> list[dict[str, Any]]:
-    with _LOCK:
-        if not QUEUE.exists():
-            return []
-        try:
-            value = json.loads(QUEUE.read_text(encoding="utf-8"))
-            return value if isinstance(value, list) else []
-        except (OSError, json.JSONDecodeError):
-            return []
+    return list(load_memory().get("execution_queue", []))
 
 
 def _save(rows: list[dict[str, Any]]) -> None:
-    with _LOCK:
-        QUEUE.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(
-            prefix="execution_queue_",
-            suffix=".json",
-            dir=QUEUE.parent,
-        )
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as file:
-                json.dump(
-                    rows[-2000:],
-                    file,
-                    indent=2,
-                    ensure_ascii=False,
-                )
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary, QUEUE)
-        finally:
-            if os.path.exists(temporary):
-                os.remove(temporary)
+    trimmed = rows[-2000:]
+
+    def mutate(memory: dict[str, Any]) -> None:
+        memory["execution_queue"] = trimmed
+
+    update_memory(mutate)
 
 
 def _validate(
