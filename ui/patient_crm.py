@@ -6,6 +6,7 @@ import streamlit as st
 
 from services.clinic_data_service import (
     APPOINTMENT_STATUSES,
+    CORPORATE_CLIENT_STATUSES,
     PACKAGE_STATUSES,
     PATIENT_STATUSES,
     PAYMENT_STATUSES,
@@ -64,6 +65,7 @@ def _show_patient_profile(patient_id):
         "**Permission to contact:** "
         + ("Recorded" if patient.get("consent_to_contact") else "Not recorded")
     )
+    st.write(f"**Date of birth:** {patient.get('date_of_birth') or 'Not recorded'}")
 
     progress, appointments, packages, payments, edit = st.tabs(
         ["Progress", "Appointments", "Packages", "Payments", "Edit"]
@@ -206,6 +208,18 @@ def _show_patient_profile(patient_id):
                 "Permission to contact recorded",
                 value=bool(patient.get("consent_to_contact", False)),
             )
+            existing_dob = patient.get("date_of_birth") or ""
+            try:
+                dob_default = date.fromisoformat(existing_dob) if existing_dob else None
+            except ValueError:
+                dob_default = None
+            date_of_birth = st.date_input(
+                "Date of birth",
+                value=dob_default,
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                format="YYYY-MM-DD",
+            )
             if st.form_submit_button("Save patient changes", type="primary"):
                 try:
                     update_record(
@@ -217,6 +231,9 @@ def _show_patient_profile(patient_id):
                             "email": email,
                             "status": status,
                             "consent_to_contact": consent,
+                            "date_of_birth": date_of_birth.isoformat()
+                            if date_of_birth
+                            else "",
                         },
                     )
                     audit_event(
@@ -308,6 +325,13 @@ def _show_patients():
                 "Status", sorted(PATIENT_STATUSES - {"Archived"})
             )
             consent = st.checkbox("Permission to contact recorded")
+            date_of_birth = st.date_input(
+                "Date of birth",
+                value=None,
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                format="YYYY-MM-DD",
+            )
             if st.form_submit_button("Create patient", type="primary"):
                 try:
                     created = add_record(
@@ -319,6 +343,9 @@ def _show_patients():
                             "status": status,
                             "consent_to_contact": consent,
                             "sessions_remaining": 0,
+                            "date_of_birth": date_of_birth.isoformat()
+                            if date_of_birth
+                            else "",
                         },
                     )
                     audit_event(
@@ -828,6 +855,95 @@ def _show_therapists():
                     st.rerun()
 
 
+def _show_corporate_leads():
+    rows = list_records("corporate_clients")
+    if rows:
+        st.dataframe(
+            [
+                {
+                    "Company": row.get("company_name", ""),
+                    "Contact": row.get("contact_name", ""),
+                    "Phone": row.get("phone", ""),
+                    "Email": row.get("email", ""),
+                    "Status": row.get("status", ""),
+                }
+                for row in rows
+            ],
+            use_container_width=True,
+        )
+    else:
+        st.info("No corporate leads have been recorded.")
+
+    create, update = st.tabs(["Add corporate lead", "Update lead"])
+    with create:
+        with st.form("create_corporate_client", clear_on_submit=True):
+            company_name = st.text_input("Company name *")
+            contact_name = st.text_input("Contact person")
+            phone = st.text_input("Phone")
+            email = st.text_input("Email")
+            notes = st.text_area(
+                "Notes",
+                placeholder="How this lead came in, what they're interested in, etc.",
+            )
+            if st.form_submit_button("Add lead", type="primary"):
+                try:
+                    created = add_record(
+                        "corporate_clients",
+                        {
+                            "company_name": company_name,
+                            "contact_name": contact_name,
+                            "phone": phone,
+                            "email": email,
+                            "notes": notes,
+                            "status": "New",
+                        },
+                    )
+                    audit_event(
+                        "local-owner",
+                        "create",
+                        "corporate_client",
+                        str(created["client_id"]),
+                    )
+                    st.success("Corporate lead added.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+    with update:
+        if not rows:
+            st.info("There is no corporate lead to update.")
+        else:
+            choices = {
+                f"{row.get('company_name', 'Unknown')} · {row.get('client_id', '')}": row
+                for row in rows
+            }
+            selected = st.selectbox("Corporate lead", list(choices))
+            lead = choices[selected]
+            statuses = sorted(CORPORATE_CLIENT_STATUSES - {"Archived"})
+            with st.form("update_corporate_client"):
+                status = st.selectbox(
+                    "Status",
+                    statuses,
+                    index=statuses.index(lead.get("status"))
+                    if lead.get("status") in statuses
+                    else 0,
+                )
+                notes = st.text_area("Notes", value=lead.get("notes", ""))
+                if st.form_submit_button("Update lead"):
+                    update_record(
+                        "corporate_clients",
+                        str(lead["client_id"]),
+                        {"status": status, "notes": notes},
+                    )
+                    audit_event(
+                        "local-owner",
+                        "update",
+                        "corporate_client",
+                        str(lead["client_id"]),
+                    )
+                    st.success("Lead updated.")
+                    st.rerun()
+
+
 def show_patient_crm():
     st.markdown(
         '<div class="eyebrow">PATIENT RELATIONSHIP OPERATIONS</div>',
@@ -918,6 +1034,20 @@ def show_team_page():
     st.title("Clinic team")
     st.caption("Maintain therapist availability and weekly capacity.")
     _show_therapists()
+
+
+def show_corporate_leads_page():
+    st.markdown(
+        '<div class="eyebrow">CRM · CORPORATE LEADS</div>',
+        unsafe_allow_html=True,
+    )
+    st.title("Corporate leads")
+    st.caption(
+        "Track corporate wellness enquiries. Jarvis can prepare an "
+        "outreach email draft for new leads — you always review and send "
+        "it yourself."
+    )
+    _show_corporate_leads()
 
 
 def show_crm_insights():

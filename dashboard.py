@@ -21,6 +21,7 @@ from ui.icons import icon
 from ui.jarvis_mode import show_jarvis_mode
 from ui.patient_crm import (
     show_appointments_page,
+    show_corporate_leads_page,
     show_crm_insights,
     show_patient_directory,
     show_payments_page,
@@ -177,6 +178,7 @@ def show_dashboard() -> None:
                 "Patients",
                 "Appointments",
                 "Treatments & Plans",
+                "Corporate Leads",
                 "Follow-ups",
                 "Dashboard",
                 "Payments",
@@ -224,6 +226,7 @@ def show_dashboard() -> None:
             "Patients": show_patient_directory,
             "Appointments": show_appointments_page,
             "Treatments & Plans": show_treatment_plans,
+            "Corporate Leads": show_corporate_leads_page,
             "Follow-ups": show_crm_insights,
             "Dashboard": show_crm_dashboard,
             "Payments": show_payments_page,
