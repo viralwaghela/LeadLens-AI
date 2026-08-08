@@ -819,6 +819,496 @@ def birthday_automation() -> CheckResult:
     )
 
 
+# Tunable: ask for a review once the visit has had a day or two to settle,
+# but not so long after that the ask feels disconnected from the visit.
+GOOGLE_REVIEW_MIN_DAYS_AFTER = 1
+GOOGLE_REVIEW_MAX_DAYS_AFTER = 3
+
+
+@check
+def google_review_automation() -> CheckResult:
+    """Tier 2: queues a WhatsApp review request for a patient whose
+    appointment was completed 1-3 days ago.
+
+    No real Google API integration exists (or is needed) for this — it's
+    a link to the clinic's own Google review page, set once in Data Hub
+    (company.google_review_link). If that's not configured, this check
+    is a deliberate no-op rather than sending a broken/blank link.
+
+    Fires once per completed appointment, ever, not daily — a specific
+    visit is a one-time event to ask about, same reasoning as
+    waiting_list_automation's one-time cancellation flag."""
+    from datetime import date
+
+    from core.memory import load_company
+    from services.clinic_data_service import list_records
+
+    review_link = str(load_company().get("google_review_link", "") or "").strip()
+    if not review_link:
+        return CheckResult(detail="no google_review_link configured in Data Hub; skipped")
+
+    today = date.today()
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_contact = 0
+
+    completed = [
+        row for row in list_records("appointments")
+        if row.get("status") == "Completed"
+    ]
+    for appointment in completed:
+        raw_date = str(appointment.get("appointment_date", "")).strip()
+        if not raw_date:
+            continue
+        try:
+            appointment_date = date.fromisoformat(raw_date)
+        except ValueError:
+            continue
+        days_since = (today - appointment_date).days
+        if not (GOOGLE_REVIEW_MIN_DAYS_AFTER <= days_since <= GOOGLE_REVIEW_MAX_DAYS_AFTER):
+            continue
+
+        from services.clinic_data_service import get_record
+
+        patient = get_record("patients", appointment.get("patient_id"))
+        if not patient or not bool(patient.get("consent_to_contact", False)):
+            skipped_no_contact += 1
+            continue
+        phone = str(patient.get("phone", "")).strip()
+        if not phone:
+            skipped_no_contact += 1
+            continue
+
+        name = patient.get("name") or "there"
+        item = queue_patient_action(
+            "google_review_automation",
+            str(appointment.get("appointment_id")),
+            provider="whatsapp",
+            action="send_text",
+            payload={
+                "to": phone,
+                "body": (
+                    f"Hi {name}, thank you for visiting us! If you have a "
+                    f"moment, we'd really appreciate a review: {review_link}"
+                ),
+            },
+            title=f"Review request — {name}",
+            impact="Goodwill/reputation request, not a sales or money conversation.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} review request(s) queued, "
+        f"{skipped_duplicate} already handled, "
+        f"{skipped_no_contact} skipped (no consent or phone on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+@check
+def missed_appointment_recovery() -> CheckResult:
+    """Tier 2: queues a WhatsApp reschedule offer for a patient whose
+    appointment is marked No-show.
+
+    Trusts the existing No-show status (services.clinic_data_service.
+    APPOINTMENT_STATUSES) rather than inferring a miss from a Scheduled
+    appointment whose date has simply passed — the latter is usually just
+    staff not having updated the record yet, not a real no-show, and
+    guessing wrong would send a patient a "we missed you" message about a
+    visit they actually attended.
+
+    Fires once per appointment, ever, not daily — a specific missed visit
+    is a one-time event to follow up on."""
+    from services.clinic_data_service import list_records
+
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_contact = 0
+
+    no_shows = [
+        row for row in list_records("appointments")
+        if row.get("status") == "No-show"
+    ]
+    for appointment in no_shows:
+        from services.clinic_data_service import get_record
+
+        patient = get_record("patients", appointment.get("patient_id"))
+        if not patient or not bool(patient.get("consent_to_contact", False)):
+            skipped_no_contact += 1
+            continue
+        phone = str(patient.get("phone", "")).strip()
+        if not phone:
+            skipped_no_contact += 1
+            continue
+
+        name = patient.get("name") or "there"
+        item = queue_patient_action(
+            "missed_appointment_recovery",
+            str(appointment.get("appointment_id")),
+            provider="whatsapp",
+            action="send_text",
+            payload={
+                "to": phone,
+                "body": (
+                    f"Hi {name}, we missed you at your last appointment "
+                    "and wanted to check in. Would you like to reschedule?"
+                ),
+            },
+            title=f"Missed appointment follow-up — {name}",
+            impact="Routine reschedule offer, not a sales or money conversation.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} reschedule offer(s) queued, "
+        f"{skipped_duplicate} already handled, "
+        f"{skipped_no_contact} skipped (no consent or phone on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+@check
+def inactive_patient_recovery() -> CheckResult:
+    """Tier 2: queues a WhatsApp check-in for each patient
+    services.live_workflow_service already identifies as inactive or
+    overdue for a visit (reuses due_followups() rather than re-deriving
+    the same risk logic — see that module for the actual flag rules).
+
+    Being inactive is an ongoing situation, not a one-time event (unlike
+    a missed appointment or a completed visit), so this re-fires once per
+    patient per calendar month while they remain inactive, rather than
+    only ever once — but not more often than that, since a monthly
+    "we miss you" is reasonable and a daily one would just be pestering
+    someone who already didn't respond."""
+    from datetime import date
+
+    from services.live_workflow_service import due_followups
+
+    month_key = date.today().isoformat()[:7]
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_phone = 0
+
+    for patient in due_followups("Inactive patient recovery"):
+        phone = str(patient.get("phone", "")).strip()
+        if not phone:
+            skipped_no_phone += 1
+            continue
+
+        name = patient.get("name") or "there"
+        item = queue_patient_action(
+            "inactive_patient_recovery",
+            f"{patient.get('patient_id')}:{month_key}",
+            provider="whatsapp",
+            action="send_text",
+            payload={
+                "to": phone,
+                "body": (
+                    f"Hi {name}, we haven't seen you in a while and wanted "
+                    "to check in. Would you like help scheduling your next "
+                    "session?"
+                ),
+            },
+            title=f"Inactive patient check-in — {name}",
+            impact="Routine relationship check-in, not a sales or money conversation.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} check-in(s) queued, "
+        f"{skipped_duplicate} already handled this month, "
+        f"{skipped_no_phone} skipped (no phone on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+# The roadmap doesn't pin down exactly what "New Patient Recovery" means.
+# Defined here as: a patient whose only completed visit was their first,
+# with nothing else scheduled — the clearest, most grounded read of "new
+# patient at risk of never coming back" using data that already exists,
+# rather than the shakier `leads` schema (see lead_qualification_alert's
+# own caveat about that). Revisit if the founder means something different.
+NEW_PATIENT_FOLLOWUP_MIN_DAYS = 14
+
+
+@check
+def new_patient_recovery() -> CheckResult:
+    """Tier 2: queues a "book your next session" WhatsApp message for a
+    patient whose only completed appointment was their first, with no
+    future appointment scheduled and enough time having passed to assume
+    they're not coming back on their own.
+
+    Fires once per patient, ever — a specific first visit is a one-time
+    thing to follow up on, not an ongoing situation."""
+    from datetime import date
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_contact = 0
+
+    appointments = list_records("appointments")
+    by_patient: dict[str, list[dict]] = {}
+    for row in appointments:
+        by_patient.setdefault(str(row.get("patient_id")), []).append(row)
+
+    for patient in list_records("patients"):
+        patient_id = str(patient.get("patient_id"))
+        patient_appointments = by_patient.get(patient_id, [])
+        completed = [
+            row for row in patient_appointments if row.get("status") == "Completed"
+        ]
+        if len(completed) != 1:
+            continue
+        has_future_scheduled = any(
+            row.get("status") == "Scheduled"
+            and str(row.get("appointment_date", "")) >= today.isoformat()
+            for row in patient_appointments
+        )
+        if has_future_scheduled:
+            continue
+
+        raw_date = str(completed[0].get("appointment_date", "")).strip()
+        try:
+            visit_date = date.fromisoformat(raw_date)
+        except ValueError:
+            continue
+        if (today - visit_date).days < NEW_PATIENT_FOLLOWUP_MIN_DAYS:
+            continue
+
+        if not bool(patient.get("consent_to_contact", False)):
+            skipped_no_contact += 1
+            continue
+        phone = str(patient.get("phone", "")).strip()
+        if not phone:
+            skipped_no_contact += 1
+            continue
+
+        name = patient.get("name") or "there"
+        item = queue_patient_action(
+            "new_patient_recovery",
+            patient_id,
+            provider="whatsapp",
+            action="send_text",
+            payload={
+                "to": phone,
+                "body": (
+                    f"Hi {name}, it's been a little while since your first "
+                    "visit with us. Would you like to book your next "
+                    "session?"
+                ),
+            },
+            title=f"New patient follow-up — {name}",
+            impact="Routine booking follow-up, not a sales or money conversation.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} follow-up(s) queued, "
+        f"{skipped_duplicate} already handled, "
+        f"{skipped_no_contact} skipped (no consent or phone on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+@check
+def corporate_lead_automation() -> CheckResult:
+    """Tier 2, research + draft only, never auto-send — deliberately more
+    cautious than the standard "queue a WhatsApp, human approves and
+    executes" Tier 2 pattern. Instead of preparing a send-able action,
+    this prepares a Gmail *draft* (provider="gmail", action="create_draft")
+    for a new corporate lead. Executing that item only ever creates a
+    draft in Gmail — see services.integration_manager_v21 — which the
+    owner must still open, review, edit and send themselves. There is no
+    path from this check to an email actually leaving the building.
+
+    Requires services.clinic_data_service's corporate_clients entity (a
+    lead with no email on file is skipped — there's nothing to draft to).
+
+    Fires once per lead, ever, not daily — a specific new lead is a
+    one-time thing to draft outreach for, and re-drafting the same lead
+    every hour while it sits in "New" would just be noise."""
+    from core.memory import load_company
+    from services.clinic_data_service import list_records
+
+    business_name = str(load_company().get("business_name", "") or "our clinic")
+    queued_count = 0
+    skipped_duplicate = 0
+    skipped_no_email = 0
+
+    new_leads = [
+        row for row in list_records("corporate_clients")
+        if row.get("status") == "New"
+    ]
+    for lead in new_leads:
+        email = str(lead.get("email", "")).strip()
+        if not email:
+            skipped_no_email += 1
+            continue
+
+        company_name = lead.get("company_name") or "there"
+        contact_name = lead.get("contact_name") or ""
+        greeting = f"Hi {contact_name}," if contact_name else "Hi,"
+        item = queue_patient_action(
+            "corporate_lead_automation",
+            str(lead.get("client_id")),
+            provider="gmail",
+            action="create_draft",
+            payload={
+                "to": email,
+                "subject": f"Corporate wellness partnership with {business_name}",
+                "body": (
+                    f"{greeting}\n\n"
+                    f"We'd love to explore a corporate wellness partnership "
+                    f"between {company_name} and {business_name}. Happy to "
+                    "share details on packages and pricing for your team "
+                    "whenever convenient — let us know a good time to talk.\n\n"
+                    "Best regards"
+                ),
+            },
+            title=f"Corporate outreach draft — {company_name}",
+            impact="Draft only — creates a Gmail draft for the owner to review and send, nothing is sent automatically.",
+        )
+        if item is not None:
+            queued_count += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{queued_count} outreach draft(s) prepared, "
+        f"{skipped_duplicate} already handled, "
+        f"{skipped_no_email} skipped (no email on file)"
+    )
+    return CheckResult(
+        approvals_queued=queued_count,
+        skipped_duplicate=skipped_duplicate,
+        detail=detail,
+    )
+
+
+@check
+def therapist_schedule_optimizer() -> CheckResult:
+    """Tier 1: suggest only, never auto-move a patient between therapists
+    (per docs/AUTOMATION_ROADMAP.md) — complements capacity_alert, which
+    only flags an over-booked therapist in isolation. This pairs that
+    signal with whichever active therapist has spare capacity in the same
+    window, so the owner gets a concrete rebalancing suggestion instead
+    of just "X is over capacity" with no obvious next step.
+
+    Fires at most once per calendar day per (over-booked, under-booked)
+    pair while the imbalance persists."""
+    from datetime import date, timedelta
+
+    from services.clinic_data_service import list_records
+
+    today = date.today()
+    window = {
+        (today + timedelta(days=offset)).isoformat()
+        for offset in range(CAPACITY_ALERT_LOOKAHEAD_DAYS)
+    }
+
+    booked_by_therapist: dict[str, int] = {}
+    for row in list_records("appointments"):
+        if row.get("status") != "Scheduled" or row.get("appointment_date") not in window:
+            continue
+        therapist_id = row.get("therapist_id")
+        if therapist_id:
+            booked_by_therapist[therapist_id] = booked_by_therapist.get(therapist_id, 0) + 1
+
+    active_therapists = [
+        row for row in list_records("therapists") if row.get("status") == "Active"
+    ]
+
+    over_booked = []
+    spare_capacity = []
+    for row in active_therapists:
+        therapist_id = row.get("therapist_id")
+        capacity = int(row.get("weekly_capacity", 0) or 0)
+        if capacity <= 0:
+            continue
+        booked = booked_by_therapist.get(therapist_id, 0)
+        spare = capacity - booked
+        if spare < 0:
+            over_booked.append((therapist_id, row.get("name") or therapist_id, -spare))
+        elif spare > 0:
+            spare_capacity.append((therapist_id, row.get("name") or therapist_id, spare))
+
+    # Greedily pair the most over-booked therapist with whoever has the
+    # most spare room, largest imbalance first — good enough for a
+    # suggestion the owner will sanity-check anyway, not a scheduling
+    # engine that needs to be provably optimal.
+    over_booked.sort(key=lambda item: item[2], reverse=True)
+    spare_capacity.sort(key=lambda item: item[2], reverse=True)
+
+    alerts_raised = 0
+    skipped_duplicate = 0
+    suggestions_made = 0
+    for over_id, over_name, overage in over_booked:
+        candidate = next((c for c in spare_capacity if c[0] != over_id), None)
+        if candidate is None:
+            continue
+        under_id, under_name, spare = candidate
+        suggestions_made += 1
+
+        move_count = min(overage, spare)
+        raised = raise_owner_alert(
+            "therapist_schedule_optimizer",
+            f"{over_id}:{under_id}:{today.isoformat()}",
+            title=f"Consider rebalancing {over_name}'s schedule",
+            message=(
+                f"{over_name} is booked {overage} appointment(s) over "
+                f"capacity for the next {CAPACITY_ALERT_LOOKAHEAD_DAYS} days, "
+                f"while {under_name} has {spare} appointment(s) of spare "
+                f"capacity in the same window. Consider moving up to "
+                f"{move_count} appointment(s) from {over_name} to "
+                f"{under_name} — this is a suggestion only; no appointment "
+                "has been changed."
+            ),
+            department="Operations",
+        )
+        if raised:
+            alerts_raised += 1
+        else:
+            skipped_duplicate += 1
+
+    detail = (
+        f"{suggestions_made} rebalancing suggestion(s) surfaced"
+        if suggestions_made
+        else "no rebalancing opportunity found"
+    )
+    return CheckResult(alerts_raised=alerts_raised, skipped_duplicate=skipped_duplicate, detail=detail)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

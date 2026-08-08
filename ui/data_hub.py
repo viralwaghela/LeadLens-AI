@@ -19,6 +19,16 @@ def show_data_hub() -> None:
             profile["industry"] = c2.text_input("Industry", value=str(company.get("industry", "")))
             profile["location"] = c1.text_input("Location", value=str(company.get("location", "")))
             profile["website"] = c2.text_input("Website", value=str(company.get("website", "")))
+            profile["google_review_link"] = c1.text_input(
+                "Google review link",
+                value=str(company.get("google_review_link", "")),
+                placeholder="https://g.page/r/.../review",
+                help=(
+                    "Used by the Google review automation to ask patients "
+                    "for a review after a completed appointment. Leave "
+                    "blank to keep that automation off."
+                ),
+            )
             profile["monthly_revenue"] = c1.number_input("Monthly revenue", min_value=0.0, value=float(company.get("monthly_revenue", 0) or 0), step=1000.0)
             profile["monthly_expenses"] = c2.number_input("Monthly expenses", min_value=0.0, value=float(company.get("monthly_expenses", 0) or 0), step=1000.0)
             profile["marketing_budget"] = c1.number_input("Marketing budget", min_value=0.0, value=float(company.get("marketing_budget", 0) or 0), step=1000.0)

@@ -38,6 +38,14 @@ APPOINTMENT_STATUSES = {
 PACKAGE_STATUSES = {"Active", "Completed", "Expired", "Paused", "Archived"}
 PAYMENT_STATUSES = {"Paid", "Pending", "Refunded", "Archived"}
 THERAPIST_STATUSES = {"Active", "Inactive", "Archived"}
+CORPORATE_CLIENT_STATUSES = {
+    "New",
+    "Contacted",
+    "Proposal Sent",
+    "Won",
+    "Lost",
+    "Archived",
+}
 
 
 def _now() -> str:
@@ -315,6 +323,24 @@ def _validate_record(
             )
         if "next_step" in row:
             row["next_step"] = _clean_text(row.get("next_step"))
+
+    elif entity == "corporate_clients":
+        if not partial or "company_name" in row:
+            row["company_name"] = _clean_text(row.get("company_name"))
+            if not row["company_name"]:
+                raise ValueError("Company name is required.")
+        if "contact_name" in row:
+            row["contact_name"] = _clean_text(row.get("contact_name"))
+        if "phone" in row:
+            row["phone"] = _clean_text(row.get("phone"))
+        if "email" in row:
+            row["email"] = _clean_text(row.get("email"))
+        if "notes" in row:
+            row["notes"] = _clean_text(row.get("notes"))
+        if not partial or "status" in row:
+            row["status"] = _validate_status(
+                row.get("status"), CORPORATE_CLIENT_STATUSES, "New"
+            )
 
     return row
 
