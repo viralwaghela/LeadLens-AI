@@ -14,7 +14,6 @@ import services.jarvis_memory as jarvis_memory
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_queue = manager.QUEUE
     original_store = jarvis_memory.STORE
     protected_environment = {
         key: os.environ.pop(key, None)
@@ -30,7 +29,6 @@ def run_tests() -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            manager.QUEUE = root / "execution_queue.json"
             jarvis_memory.STORE = root / "learning_memory.json"
 
             tracked = jarvis_memory.track_recommendation(
@@ -115,7 +113,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        manager.QUEUE = original_queue
         jarvis_memory.STORE = original_store
         for key, value in protected_environment.items():
             if value is not None:

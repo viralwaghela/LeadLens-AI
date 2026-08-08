@@ -32,14 +32,12 @@ def _appointment(appointment_id, patient_id, days_ago, status="Completed"):
 
 def run_tests() -> None:
     original_database_folder = business_memory.DATABASE_FOLDER
-    original_queue = manager.QUEUE
     original_checks = list(scheduler.CHECKS)
 
     try:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             business_memory.DATABASE_FOLDER = root / "database"
-            manager.QUEUE = root / "execution_queue.json"
 
             scheduler.CHECKS.clear()
             scheduler.CHECKS.append(scheduler.google_review_automation)
@@ -93,7 +91,6 @@ def run_tests() -> None:
 
     finally:
         business_memory.DATABASE_FOLDER = original_database_folder
-        manager.QUEUE = original_queue
         scheduler.CHECKS.clear()
         scheduler.CHECKS.extend(original_checks)
 
