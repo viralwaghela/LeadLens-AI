@@ -81,9 +81,12 @@ A subset of `tests/` (scheduler and automation checks — `test_scheduler.py`,
 `test_capacity_alert.py`, `test_lead_qualification_alert.py`,
 `test_low_booking_alert.py`, `test_monthly_business_review.py`,
 `test_revenue_monitoring.py`, `test_waiting_list_automation.py`,
-`test_birthday_automation.py`, `TEST_PHASES_21_TO_23.py`) are standalone
-scripts rather than pytest functions. Run each directly from the project
-root with the root on `PYTHONPATH`:
+`test_birthday_automation.py`, `test_google_review_automation.py`,
+`test_missed_appointment_recovery.py`, `test_inactive_patient_recovery.py`,
+`test_new_patient_recovery.py`, `test_corporate_lead_automation.py`,
+`test_therapist_schedule_optimizer.py`, `TEST_PHASES_21_TO_23.py`) are
+standalone scripts rather than pytest functions. Run each directly from
+the project root with the root on `PYTHONPATH`:
 
 ```powershell
 $env:PYTHONPATH = "."

@@ -83,18 +83,57 @@ written defensively against that — treats a lead as open unless status
 looks terminal, checks a few plausible date-field names for staleness.
 Revisit once real lead data exists and a schema is actually decided.
 
-## Phase 2 — Tier 2 automations (patient-facing, tone-sensitive)
-Only start once Phase 1 has been running reliably for at least a
-couple of weeks with no bad surprises. In priority order:
-1. Birthday Automation (needs a birthday/date_of_birth field added to
-   the patient schema first — doesn't exist yet)
-2. Google Review Automation (needs a new integration — none exists yet)
-3. Missed Appointment Recovery
-4. Inactive Patient Recovery (closest to already built —
-   `services/live_workflow_service.due_followups()` already computes this)
-5. New Patient Recovery
-6. Corporate Lead Automation (research + draft only, never auto-send)
-7. Therapist Schedule Optimizer (suggest only, never auto-move patients)
+## Phase 2 — Tier 2 automations (patient-facing, tone-sensitive) — DONE
+Built 2026-08-09, ahead of the "couple of weeks of Phase 1 running
+reliably" gate this section originally called for — an explicit founder
+decision to proceed anyway, not an oversight. All seven are implemented
+in `scheduler/run_scheduled_checks.py` and approval-gated (queue into the
+Approval Queue via `queue_patient_action`, never auto-send — the Phase 1
+booking-confirmation/24hr-reminder auto-send exception was a one-time
+decision for that content only and does not extend here):
+
+1. **Birthday Automation** — added an optional `date_of_birth` field to
+   the patient schema (`services/clinic_data_service.py`,
+   `ui/patient_crm.py`); `birthday_automation()` matches month+day, once
+   per patient per year.
+2. **Google Review Automation** — no real Google API integration built or
+   needed; added a `google_review_link` field to the company profile
+   (Data Hub), `google_review_automation()` messages a patient 1-3 days
+   after a completed appointment, and is a deliberate no-op if the link
+   isn't configured.
+3. **Missed Appointment Recovery** — `missed_appointment_recovery()`
+   triggers on the existing `No-show` appointment status, not on a
+   Scheduled appointment whose date merely passed (that's usually just an
+   unupdated record, not a real miss).
+4. **Inactive Patient Recovery** — `inactive_patient_recovery()` reuses
+   `services/live_workflow_service.due_followups()`'s existing risk-flag
+   logic rather than re-deriving it; re-fires monthly per patient while
+   they remain inactive (not more often — a daily "we miss you" would be
+   pestering, not a check-in).
+5. **New Patient Recovery** — the roadmap didn't define this precisely;
+   built as "a patient whose only completed visit was their first, with
+   nothing else scheduled, 14+ days out" — the clearest signal available
+   in existing data without leaning on the shakier `leads` schema. Revisit
+   if a different definition was actually meant.
+6. **Corporate Lead Automation** — there was no way to record a corporate
+   lead anywhere in the app before this; added a minimal Corporate Leads
+   CRM page (`ui/patient_crm.py`, new `corporate_clients` validation) so
+   the automation has real data to work from. True to "research + draft
+   only, never auto-send": `corporate_lead_automation()` prepares a Gmail
+   *draft* (`provider="gmail", action="create_draft"`), which only ever
+   creates a draft in Gmail for the owner to review, edit and send
+   themselves — there's no path from this check to an email leaving on
+   its own.
+7. **Therapist Schedule Optimizer** — Tier 1 in practice (owner-facing
+   suggestion, not patient-facing), since "suggest only, never auto-move
+   patients" means nothing ever reaches a patient. Complements the
+   existing `capacity_alert` (which only flags an over-booked therapist in
+   isolation) by pairing that signal with whichever active therapist has
+   spare capacity in the same window, so the owner gets a concrete
+   rebalancing suggestion, not just a flag with no obvious next step.
+
+Every item has a regression test under `tests/` (see README's list of
+script-style scheduler tests), verified against local SQLite only.
 
 ## Phase 3 — Tier 3 (money/discount-adjacent) — stays approval-gated
 Package Renewal, Payment Reminder, Membership Renewal, Referral Rewards.
