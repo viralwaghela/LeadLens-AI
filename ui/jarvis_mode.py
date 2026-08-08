@@ -13,6 +13,8 @@ from services.jarvis_context import context_audit
 from services.specialist_orchestration import coordinate_specialists
 from services.platform_data import business_snapshot
 from services.ai import openai_is_configured
+from services.clinic_data_service import records_with_patient_names, update_record
+from services.security_service import audit_event
 from ui.icons import icon
 
 # Beyond Pain (and every clinic on this deployment so far) operates in
@@ -108,12 +110,10 @@ def _metric_card(label: str, value: str, delta: str, icon_name: str, spark_html:
     )
 
 
-AGENT_ICONS = {
-    "Marketing Agent": "megaphone",
-    "Operations Agent": "gear",
-    "Finance Agent": "rupee",
-    "Customer Success Agent": "users",
-    "Sales Agent": "bar-chart",
+APPOINTMENT_STATUS_BADGE = {
+    "Completed": ("✓ Completed", "ok"),
+    "Cancelled": ("✕ Cancelled", "warn"),
+    "No-show": ("⚠ No-show", "warn"),
 }
 
 APPROVAL_ICONS = {
@@ -127,13 +127,15 @@ APPROVAL_ICONS = {
 }
 
 
-def _agent_card(name: str, task: str, icon_name: str) -> str:
-    return (
-        f'<div class="jv-agent-card"><div class="jv-agent-icon">{icon(icon_name, 20)}</div>'
-        f'<div class="jv-agent-name">{_esc(name)}</div>'
-        f'<div class="jv-agent-state">● ONLINE</div>'
-        f'<div class="jv-agent-task">{_esc(task)}</div></div>'
-    )
+def _todays_appointments() -> list[dict]:
+    today = datetime.now(CLINIC_TIMEZONE).date().isoformat()
+    rows = [
+        row
+        for row in records_with_patient_names("appointments")
+        if row.get("appointment_date") == today
+    ]
+    rows.sort(key=lambda row: row.get("appointment_time") or "")
+    return rows
 
 
 def _recent_activity(memory: dict, limit: int = 5) -> list[dict]:
@@ -245,22 +247,39 @@ def show_jarvis_mode():
     # ---- AI employees / Jarvis briefing / Approval queue ------------------
     col_agents, col_brief, col_approvals = st.columns([2.15, 1.05, 1.15], gap="medium")
 
-    agents = [
-        ("Marketing Agent", "Campaigns monitored"),
-        ("Operations Agent", "Clinic operations"),
-        ("Finance Agent", "Cash flow analysis"),
-        ("Customer Success Agent", "Patient follow-ups"),
-        ("Sales Agent", "Growth pipeline"),
-    ]
-
     with col_agents:
         with st.container(border=True):
-            st.markdown('<div class="jv-panel-anchor"></div><div class="jv-panel-head"><div class="jv-panel-eyebrow">AI Employees Status</div></div>', unsafe_allow_html=True)
-            cols = st.columns(len(agents))
-            for c, (name, task) in zip(cols, agents):
-                with c:
-                    st.markdown(_agent_card(name, task, AGENT_ICONS.get(name, "sparkle")), unsafe_allow_html=True)
-                    st.button("View Details", key=f"agent_view_{name}", use_container_width=True)
+            todays_appointments = _todays_appointments()
+            st.markdown(
+                f'<div class="jv-panel-anchor"></div><div class="jv-panel-head">'
+                f'<div class="jv-panel-eyebrow">Today\'s Appointments ({len(todays_appointments)})</div></div>',
+                unsafe_allow_html=True,
+            )
+            if not todays_appointments:
+                st.markdown('<div class="jv-brief-item"><div class="jv-brief-dot"></div><div>No appointments scheduled for today.</div></div>', unsafe_allow_html=True)
+            for row in todays_appointments:
+                appt_id = row.get("appointment_id")
+                status = row.get("status", "Scheduled")
+                time_label = row.get("appointment_time") or "--:--"
+                patient_name = row.get("patient_name", "Unknown patient")
+                service = row.get("service") or "Appointment"
+                left, right = st.columns([3, 1.2])
+                with left:
+                    st.markdown(
+                        f'<div class="jv-approval-item"><div class="jv-approval-icon">{icon("clipboard", 15)}</div>'
+                        f'<div style="flex:1"><div class="jv-approval-title">{_esc(time_label)} · {_esc(patient_name)}</div>'
+                        f'<div class="jv-approval-sub">{_esc(service)}</div></div></div>',
+                        unsafe_allow_html=True,
+                    )
+                with right:
+                    if status == "Scheduled":
+                        if st.button("Mark completed", key=f"complete_appt_{appt_id}", use_container_width=True):
+                            update_record("appointments", appt_id, {"status": "Completed"})
+                            audit_event("local-owner", "update", "appointment", str(appt_id))
+                            st.rerun()
+                    else:
+                        badge_text, _ = APPOINTMENT_STATUS_BADGE.get(status, (status, "warn"))
+                        st.markdown(f'<div class="jv-agent-state">{_esc(badge_text)}</div>', unsafe_allow_html=True)
 
     with col_brief:
         with st.container(border=True):
