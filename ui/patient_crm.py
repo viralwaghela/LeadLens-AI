@@ -414,7 +414,7 @@ def _show_appointments():
                     except ValueError as error:
                         st.error(str(error))
     with update:
-        appointments = list_records("appointments")
+        appointments = records_with_patient_names("appointments")
         if not appointments:
             st.info("There is no appointment to update.")
         else:
@@ -422,7 +422,8 @@ def _show_appointments():
                 (
                     f"{row.get('appointment_date', '')} "
                     f"{row.get('appointment_time', '')} · "
-                    f"{row.get('appointment_id', '')}"
+                    f"{row.get('patient_name', 'Unknown patient')} "
+                    f"({row.get('appointment_id', '')})"
                 ): row
                 for row in appointments
             }
