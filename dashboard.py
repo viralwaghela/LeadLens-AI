@@ -157,7 +157,7 @@ def show_dashboard() -> None:
         # mode from the query string so the reload doesn't silently bounce
         # the workspace back to the CRM default.
         queried = st.query_params.get("workspace", "").upper()
-        st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "CRM"
+        st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "JARVIS"
     is_crm_only_role = current_role() == ROLE_CRM_ONLY
     if is_crm_only_role:
         # Enforced here, not just by hiding the Core switch below — a
