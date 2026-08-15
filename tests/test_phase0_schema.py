@@ -203,7 +203,7 @@ def test_duplicate_membership_rejected(session) -> None:
 
     session.add(Membership(user_id=user.id, organization_id=org.id, role=MembershipRole.OWNER))
     session.flush()
-    session.add(Membership(user_id=user.id, organization_id=org.id, role=MembershipRole.THERAPIST))
+    session.add(Membership(user_id=user.id, organization_id=org.id, role=MembershipRole.PRACTITIONER))
     with pytest.raises(IntegrityError):
         session.flush()
     session.rollback()

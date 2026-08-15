@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from core.db.models import clinic  # noqa: F401
 from core.db.models import identity  # noqa: F401
+from core.db.models import identity_audit  # noqa: F401
 from core.db.models import jarvis  # noqa: F401
 from core.db.models import operations  # noqa: F401
 from core.db.models import organization  # noqa: F401
 
-__all__ = ["clinic", "identity", "jarvis", "operations", "organization"]
+__all__ = ["clinic", "identity", "identity_audit", "jarvis", "operations", "organization"]

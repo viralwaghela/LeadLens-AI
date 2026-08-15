@@ -15,3 +15,8 @@ psycopg2-binary>=2.9,<3
 # docs/V2_COEXISTENCE.md before wiring anything to them.
 SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
+
+# V2 Phase 1: identity/authorization backend (core/identity/). Argon2id
+# password hashing via argon2-cffi. Not used by core/auth.py (the live
+# login path) — see docs/V2_PHASE1_IDENTITY.md.
+argon2-cffi>=23,<26

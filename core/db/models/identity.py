@@ -1,16 +1,38 @@
 """User and Membership — future identity foundation.
 
 Nothing in the live app creates or reads these tables. core/auth.py is
-untouched by Phase 0 and remains the actual login gate — see that file's
-own docstring. These models exist so a later phase has real user/
-membership infrastructure to migrate onto, without inventing it under
-time pressure alongside the actual auth cutover.
+untouched and remains the actual login gate — see that file's own
+docstring. These models exist so a later phase has real user/membership
+infrastructure to migrate onto, without inventing it under time pressure
+alongside the actual auth cutover.
+
+Phase 1 extends this Phase 0 foundation (see core/identity/ for the
+backend services built on top of it):
+
+- UserStatus gained DISABLED (renamed from INACTIVE, to match Phase 1's
+  spec vocabulary) and INVITED (for a future onboarding flow — not
+  implemented yet, just reserved so the enum doesn't need another
+  migration when it is).
+- User gained last_login_at, set only by
+  core.identity.authentication_service.authenticate() on success.
+- MembershipStatus gained DISABLED (renamed from INACTIVE, same reason).
+- MembershipRole was expanded from the 4 roles mirrored from
+  services/security_service.py (Owner/Therapist/Receptionist/Viewer) to
+  Phase 1's smallest-useful SaaS role model: OWNER, ADMIN, RECEPTIONIST,
+  PRACTITIONER (renamed from Therapist — provider-neutral term), FINANCE,
+  MARKETING, VIEWER. See core/identity/permissions.py for the full
+  role -> permission matrix and docs/V2_PHASE1_IDENTITY.md for the
+  rationale. This is still a dormant schema (nothing live reads it), so
+  renaming enum members here does not change any live behavior — Phase
+  0's own test suite (tests/test_phase0_schema.py) was updated in the
+  same commit to use the new names.
 """
 from __future__ import annotations
 
 import enum
+from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
@@ -19,7 +41,8 @@ from core.db.models.mixins import TimestampMixin
 
 class UserStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
-    INACTIVE = "INACTIVE"
+    DISABLED = "DISABLED"
+    INVITED = "INVITED"
 
 
 class User(TimestampMixin, Base):
@@ -31,25 +54,34 @@ class User(TimestampMixin, Base):
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status"), nullable=False, default=UserStatus.ACTIVE
     )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        # Deliberately excludes password_hash from repr/logging output.
+        return f"User(id={self.id!r}, email={self.email!r}, status={self.status!r})"
 
 
 class MembershipStatus(str, enum.Enum):
     ACTIVE = "ACTIVE"
-    INACTIVE = "INACTIVE"
+    DISABLED = "DISABLED"
 
 
 class MembershipRole(str, enum.Enum):
-    """Deliberately mirrors the role names already defined (but not yet
-    enforced anywhere) in services/security_service.py's ROLE_PERMISSIONS
-    dict, rather than inventing a new taxonomy Phase 0 would have to
-    reconcile with that one later."""
+    """Phase 1's smallest-useful SaaS role model. See
+    core/identity/permissions.py for what each role can actually do, and
+    docs/V2_PHASE1_IDENTITY.md for why this list (not a straight copy of
+    services/security_service.py's currently-unenforced Owner/Therapist/
+    Receptionist/Viewer set) was chosen."""
 
-    OWNER = "Owner"
-    THERAPIST = "Therapist"
-    RECEPTIONIST = "Receptionist"
-    VIEWER = "Viewer"
+    OWNER = "OWNER"
+    ADMIN = "ADMIN"
+    RECEPTIONIST = "RECEPTIONIST"
+    PRACTITIONER = "PRACTITIONER"
+    FINANCE = "FINANCE"
+    MARKETING = "MARKETING"
+    VIEWER = "VIEWER"
 
 
 class Membership(TimestampMixin, Base):
@@ -75,3 +107,10 @@ class Membership(TimestampMixin, Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="memberships")
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return (
+            f"Membership(id={self.id!r}, user_id={self.user_id!r}, "
+            f"organization_id={self.organization_id!r}, role={self.role!r}, "
+            f"status={self.status!r})"
+        )
