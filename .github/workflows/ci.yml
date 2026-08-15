@@ -1,0 +1,131 @@
+name: CI
+
+# The V2 audit found that the existing test suite (pytest-collectible AND
+# script-style regression tests, see tests/) was never run automatically
+# anywhere. This closes that gap, and adds Phase 0's own checks.
+#
+# Deliberately does NOT reference any real secret (DATABASE_URL,
+# OPENAI_API_KEY, WHATSAPP_*, GMAIL_*, GOOGLE_*) anywhere in this file —
+# every job here runs with a clean environment. tests/_bootstrap.py's
+# guard (hard-fails if DATABASE_URL is already set at import time, and
+# strips it from every load_dotenv() call afterward) means the existing
+# test suite is designed to work exactly like this: no .env file exists
+# in a fresh checkout, so core.memory falls back to a throwaway local
+# SQLite file automatically, and AI-calling tests mock generate_ai_response
+# rather than needing a real OpenAI key (see
+# tests/test_specialist_orchestration.py's use of unittest.mock.patch).
+# WhatsApp/Gmail/Calendar dry-run mode auto-triggers the same way in CI
+# as it does in any deployment missing those credentials — nothing here
+# needs to force it.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - client-1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Confirm no real DATABASE_URL/API secrets are present in this job's environment
+        run: |
+          for var in DATABASE_URL OPENAI_API_KEY WHATSAPP_ACCESS_TOKEN GOOGLE_SERVICE_ACCOUNT_FILE; do
+            if [ -n "${!var:-}" ]; then
+              echo "::error::$var is unexpectedly set in the CI environment — refusing to run tests."
+              exit 1
+            fi
+          done
+          echo "Clean environment confirmed — no real credentials present."
+
+      - name: Run pytest-collectible tests (existing + Phase 0)
+        run: python -m pytest tests/ -v
+
+      - name: Run script-style regression tests
+        # These predate pytest discovery in this repo (run_tests()/run(),
+        # guarded by if __name__ == "__main__") — see README.md's
+        # "Running the tests" section for the authoritative list. Looping
+        # here rather than hardcoding count, but the file list itself is
+        # explicit so a new script-style test silently not being added to
+        # this list is visible in review, not just silently uncovered.
+        run: |
+          set -e
+          for f in \
+            test_scheduler \
+            test_memory_locking \
+            test_appointment_reminder \
+            test_approval_actions \
+            test_capacity_alert \
+            test_lead_qualification_alert \
+            test_low_booking_alert \
+            test_monthly_business_review \
+            test_revenue_monitoring \
+            test_waiting_list_automation \
+            test_birthday_automation \
+            test_google_review_automation \
+            test_missed_appointment_recovery \
+            test_inactive_patient_recovery \
+            test_new_patient_recovery \
+            test_corporate_lead_automation \
+            test_therapist_schedule_optimizer \
+            test_jarvis_memory \
+            TEST_PHASES_21_TO_23 \
+          ; do
+            echo "::group::tests/$f.py"
+            PYTHONPATH=. python "tests/$f.py"
+            echo "::endgroup::"
+          done
+          echo "NOTE: tests/test_clinic_crm.py is intentionally excluded — it is a"
+          echo "pre-existing, unrelated failure (references services.clinic_data_service.BASE,"
+          echo "an attribute removed long before Phase 0; confirmed unrelated to Phase 0 by"
+          echo "reproducing it against a clean pre-Phase-0 tree). Not fixed here per scope"
+          echo "discipline. See docs/V2_COEXISTENCE.md."
+
+      - name: Alembic — upgrade from empty database
+        run: |
+          export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
+          python -m alembic upgrade head
+
+      - name: Alembic — model/migration drift check
+        run: |
+          export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
+          python -m alembic check
+
+      - name: Alembic — downgrade/upgrade cycle
+        run: |
+          export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+
+      - name: Lint
+        run: echo "No lint tool is configured in this repository (no ruff/flake8/pyproject.toml lint config found) — skipping. See docs/V2_COEXISTENCE.md."
+
+      - name: Type checks
+        run: echo "No type checker is configured in this repository (no mypy.ini/pyproject.toml mypy config found) — skipping."
+
+      - name: Secrets scan (dependency-free, pattern-based)
+        run: |
+          set -e
+          # Minimal, dependency-free pattern scan — deliberately not pulling
+          # in a third-party GitHub Action for this, to avoid adding a new
+          # supply-chain trust dependency to CI without that being its own
+          # discussed decision. Mirrors the same class of check the
+          # repository's own .git/hooks/pre-commit already does locally.
+          PATTERNS='sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}'
+          if git grep -InE "$PATTERNS" -- . ':!*.md' ':!.github/workflows/ci.yml'; then
+            echo "::error::Possible secret pattern found in tracked files — see matches above."
+            exit 1
+          fi
+          echo "No obvious secret patterns found in tracked files."

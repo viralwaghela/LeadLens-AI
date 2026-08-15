@@ -9,3 +9,9 @@ google-api-python-client>=2.150,<3
 google-auth>=2.35,<3
 google-auth-httplib2>=0.2,<1
 psycopg2-binary>=2.9,<3
+
+# V2 Phase 0: relational schema foundation (core/db/, alembic/). Additive
+# infrastructure only — nothing in the live app imports these yet. See
+# docs/V2_COEXISTENCE.md before wiring anything to them.
+SQLAlchemy>=2.0,<3
+alembic>=1.13,<2

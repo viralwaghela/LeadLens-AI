@@ -63,7 +63,11 @@ feature in its own right.
    product, but that requires a genuine multi-tenant rebuild — separate,
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
-   it first, since it's a significant architectural decision.
+   it first, since it's a significant architectural decision. **V2 Phase 0
+   has been built** (a dormant, additive-only relational schema — see
+   "V2 migration" below) but the live app still runs entirely on the
+   single-row `memory_store` design; Phase 0 does not change this gap,
+   it only lays groundwork for the phase that eventually will.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -90,6 +94,28 @@ feature in its own right.
   surfaced by those tests were fixed along the way (in
   `services/learning_memory_v22.py` and
   `services/agent_collaboration_v23.py`).
+
+## V2 migration (in progress — read before touching `core/db/`, `alembic/`)
+
+LeadLens V2 is an incremental brownfield migration, not a rewrite.
+**The legacy `core/memory.py` path remains the production source of
+truth until an explicit later phase changes that.** A relational
+SQLAlchemy/Alembic schema now exists (`core/db/`, `alembic/`, Phase 0)
+alongside it, but is completely dormant — no live read or write path
+(`services/`, `ui/`, `scheduler/`) imports anything from `core/db/`
+yet. **Do not wire the new schema into a live read or write path
+without that being its own explicit, discussed phase** — see
+`docs/V2_COEXISTENCE.md` for the full architecture, the field-by-field
+mapping from the live JSON schema, and the intended future backfill
+sequence.
+
+**Do not rebuild these without a real reason** (verified working,
+tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
+own "Do not rebuild" section for the full reasoning per item):
+specialist orchestration, the approval/execution engine, automation
+qualification logic in `scheduler/run_scheduled_checks.py`, the
+integration adapters' actual API-calling code in `integrations/*.py`,
+the current Streamlit UI, the Docker foundation.
 
 ## Automation roadmap
 

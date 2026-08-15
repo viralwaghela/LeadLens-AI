@@ -17,3 +17,13 @@ database/leadlens.db-wal
 database/leadlens.db-shm
 database/leadlens.corrupt-*.json
 database/backups/
+
+# V2 Phase 0 — core/db/session.py's local SQLite fallback (see that
+# file's docstring for why it's a separate file from leadlens.db above),
+# plus any throwaway Alembic test databases created during manual
+# verification (see docs/V2_COEXISTENCE.md). No .db file anywhere in
+# this repo is ever meant to be committed, so this is a blanket pattern,
+# not a per-file list.
+*.db
+*.db-wal
+*.db-shm
