@@ -2,11 +2,14 @@ name: CI
 
 # The V2 audit found that the existing test suite (pytest-collectible AND
 # script-style regression tests, see tests/) was never run automatically
-# anywhere. This closes that gap, and adds Phase 0's and Phase 1's own
-# checks. Phase 1 (core/identity/) needs no extra CI step beyond the
-# existing `pytest tests/ -v` — tests/test_phase1_identity.py is
-# pytest-collectible like tests/test_phase0_schema.py, and Argon2id
-# password hashing is fully local (no external service, no secret).
+# anywhere. This closes that gap, and adds Phase 0's, Phase 1's, and
+# Phase 2's own checks. Phase 1 (core/identity/) and Phase 2
+# (services/jarvis_memory.py's DB-backed storage) need no extra CI step
+# beyond the existing `pytest tests/ -v` — tests/test_phase1_identity.py
+# and tests/test_phase2_jarvis_memory.py are pytest-collectible like
+# tests/test_phase0_schema.py. Argon2id password hashing (Phase 1) is
+# fully local, and Phase 2's DB/JSON storage is fully local too — no
+# external service, no secret, needed for either.
 #
 # Deliberately does NOT reference any real secret (DATABASE_URL,
 # OPENAI_API_KEY, WHATSAPP_*, GMAIL_*, GOOGLE_*) anywhere in this file —
@@ -54,7 +57,7 @@ jobs:
           done
           echo "Clean environment confirmed — no real credentials present."
 
-      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1)
+      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2)
         run: python -m pytest tests/ -v
 
       - name: Run script-style regression tests
@@ -97,7 +100,7 @@ jobs:
           echo "reproducing it against a clean pre-Phase-0 tree). Not fixed here per scope"
           echo "discipline. See docs/V2_COEXISTENCE.md."
 
-      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1)
+      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1 + Phase 2)
         run: |
           export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
           python -m alembic upgrade head

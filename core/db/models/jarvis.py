@@ -1,39 +1,28 @@
-"""Jarvis learning-memory persistence foundation — deliberately minimal.
+"""Jarvis learning-memory persistence — Phase 2's live durable store.
 
-services/jarvis_memory.py (read in full for this phase) currently stores
-five related but distinctly-shaped record types in one flat JSON file
-(data/learning/learning_memory.json, not even in core/memory.py yet):
-preferences, recommendations, outcomes, executions, and patterns (the
-last of which is fully *derived* from outcomes on every write via
-_derive_patterns(), not independently authored data).
+Originally added dormant in Phase 0 (deliberately minimal — see git
+history for that phase's reasoning on why a single generic table beats
+five fully-normalized ones before real usage patterns were known).
+Phase 2 is the migration phase that docstring predicted, and now
+actually reads/writes this table live via services/jarvis_memory.py.
 
-Fully normalizing that into five separate typed tables now — before any
-actual migration is happening, and before real usage patterns under
-multi-tenancy are known — is exactly the kind of premature schema
-invention this phase is warned against, and the task's own instructions
-give an explicit escape hatch for this: "If adding the model risks scope
-creep, document it and defer to Phase 2."
-
-What's added instead: one dormant, deliberately generic table that can
-hold any of the four *authored* record types (preferences,
-recommendations, outcomes, executions — not patterns, which should stay
-computed rather than stored, in whichever phase actually migrates this)
-behind a `record_type` discriminator and a JSON `payload`, org-scoped and
-with a `fingerprint` column mirroring jarvis_memory.py's own dedup
-fingerprints (track_recommendation() and record_action_execution() both
-already fingerprint/dedupe their rows the same way). This is enough to
-prove the storage pattern (org-scoped, durable, coexisting with
-core/memory.py) without inventing the final per-type column layout.
-
-jarvis_memory.py itself is completely untouched — it still reads/writes
-its own flat file exactly as before. Full normalization into typed
-tables (JarvisPreference, JarvisRecommendation, JarvisOutcome,
-JarvisExecution) is deferred to the phase that actually performs this
-migration, once the real query patterns under multi-tenancy are known.
+One row per *authored* record (preference, recommendation, outcome, or
+execution — not "pattern", which stays derived/computed on every read
+via jarvis_memory._derive_patterns(), never independently persisted,
+exactly as before). `fingerprint` reuses each legacy JSON row's own
+`id` field (e.g. "PREF-A1B2C3D4E5") as the natural, already-unique,
+already-stable dedup key — see services/jarvis_memory.py and
+docs/V2_PHASE2_JARVIS_MEMORY.md for the full read/write design
+(DB-primary once migrated, legacy-JSON fallback before that, and a
+permanent compatibility write to the JSON file because
+services/jarvis_context.py has its own independent direct-file-read
+dependency on it for provenance display).
 """
 from __future__ import annotations
 
 import enum
+
+from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -67,4 +56,5 @@ class JarvisLearningRecord(OrgScopedMixin, Base):
     external_id: Mapped[str | None] = mapped_column(String(60))
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[str] = mapped_column(Text, nullable=False)  # JSON-encoded
-    recorded_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

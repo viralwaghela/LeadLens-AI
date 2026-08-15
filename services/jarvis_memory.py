@@ -4,26 +4,94 @@ The business database remains the source of operational truth. This module
 stores only owner preferences, tracked recommendations, measured outcomes and
 derived patterns. Writes are explicit and atomic; normal Jarvis consultations
 are read-only.
+
+Phase 2 storage design (see docs/V2_PHASE2_JARVIS_MEMORY.md for the full
+writeup):
+
+    read:  DB (core/db/models/jarvis.py's JarvisLearningRecord)
+           -> if no migrated data exists for the default organization yet,
+              or the DB is unavailable, fall back to the legacy JSON file
+
+    write: legacy JSON file (STORE), always, exactly as before Phase 2
+           -> then best-effort mirror into the DB
+
+The legacy JSON write is NOT a "during transition only" measure — it is
+permanent, because services/jarvis_context.py has its own independent
+direct-file-read on this exact path (for a provenance/source-status
+display) that Phase 2 deliberately does not touch, per its "storage
+migration only" scope. See that file's LEARNING_FILE constant.
+
+Every public function's signature and return shape is unchanged from
+before Phase 2 — callers do not need to know or care whether a given
+read came from the database or the JSON file.
+
+DB failures never crash a Jarvis write: the JSON write happens first and
+unconditionally, so a database outage never loses data or corrupts the
+legacy file; the DB write is attempted afterward, and a failure there is
+logged loudly (not swallowed) rather than silently reported as success.
+An explicit environment-variable kill switch
+(LEADLENS_JARVIS_MEMORY_DB_DISABLED=1) restores pre-Phase-2, JSON-only
+behavior entirely, for rollback — see docs/V2_PHASE2_JARVIS_MEMORY.md.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from core.db.models.jarvis import JarvisLearningRecord, JarvisLearningRecordType
+from core.db.session import make_engine, session_scope
+from core.identity.organization_service import create_organization, get_organization_by_slug
+
 
 ROOT = Path(__file__).resolve().parents[1]
-STORE = ROOT / "data" / "learning" / "learning_memory.json"
+
+
+def _resolve_store_path() -> Path:
+    override = os.getenv("LEADLENS_LEARNING_MEMORY_PATH", "").strip()
+    if override:
+        return Path(override)
+    return ROOT / "data" / "learning" / "learning_memory.json"
+
+
+STORE = _resolve_store_path()
 SCHEMA_VERSION = 3
 _LOCK = threading.RLock()
+_LOG = logging.getLogger(__name__)
+
+# Rollback kill switch (see module docstring / docs/V2_PHASE2_JARVIS_MEMORY.md):
+# when set, every DB read/write path is skipped entirely and this module
+# behaves exactly as it did before Phase 2 (JSON file only).
+_DB_DISABLED = os.getenv("LEADLENS_JARVIS_MEMORY_DB_DISABLED", "").strip().lower() in {
+    "1", "true", "yes",
+}
+
+# Single-clinic bootstrap default. Not live tenant routing — there is no
+# per-request/per-user organization context anywhere in the live app yet
+# (see CLAUDE.md's multi-tenancy gap) — this is only the one fixed
+# organization this Phase 2 storage layer writes to today, resolved
+# fresh (get-or-create by slug) on every DB access rather than cached,
+# so tests can freely swap engines without stale-ID bugs.
+DEFAULT_ORGANIZATION_SLUG = os.getenv("LEADLENS_DEFAULT_ORG_SLUG", "default-clinic")
+DEFAULT_ORGANIZATION_NAME = "Default Clinic"
+
+# Lazily created, cached engine. Tests override this directly
+# (patch.object(jarvis_memory, "_ENGINE", test_engine)), exactly like the
+# existing STORE-patching convention — see tests/test_phase2_jarvis_memory.py.
+_ENGINE = None
+_ENGINE_LOCK = threading.RLock()
 
 DEFAULT_MEMORY: dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
@@ -37,6 +105,14 @@ DEFAULT_MEMORY: dict[str, Any] = {
 
 ALLOWED_RESULTS = {"successful", "partial", "unsuccessful", "unknown"}
 TOKEN_PATTERN = re.compile(r"[a-z0-9₹%]+", re.IGNORECASE)
+
+_RECORD_TYPE_BY_KEY = {
+    "preferences": JarvisLearningRecordType.PREFERENCE,
+    "recommendations": JarvisLearningRecordType.RECOMMENDATION,
+    "outcomes": JarvisLearningRecordType.OUTCOME,
+    "executions": JarvisLearningRecordType.EXECUTION,
+}
+_AUTHORED_KEYS = tuple(_RECORD_TYPE_BY_KEY.keys())  # excludes "patterns" — always derived
 
 
 def _now() -> str:
@@ -78,7 +154,39 @@ def _migrate(payload: Any) -> dict[str, Any]:
     return migrated
 
 
-def load_learning_memory() -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# DB engine / default-organization resolution
+# ---------------------------------------------------------------------------
+
+def _get_engine():
+    global _ENGINE
+    with _ENGINE_LOCK:
+        if _ENGINE is None:
+            _ENGINE = make_engine()
+        return _ENGINE
+
+
+def _resolve_default_organization_id(session: Session) -> int:
+    """Get-or-create the single default organization this deployment's
+    Jarvis memory is scoped to. Resolved fresh every call (not cached)
+    so tests can swap engines without stale-ID bugs — this deployment
+    has at most a handful of Jarvis-memory DB calls per user action, so
+    the extra SELECT is not a meaningful cost. See module docstring for
+    why this is bootstrap plumbing, not live tenant routing."""
+    org = get_organization_by_slug(session, DEFAULT_ORGANIZATION_SLUG)
+    if org is not None:
+        return org.id
+    org = create_organization(
+        session, name=DEFAULT_ORGANIZATION_NAME, slug=DEFAULT_ORGANIZATION_SLUG
+    )
+    return org.id
+
+
+# ---------------------------------------------------------------------------
+# JSON storage (legacy path — always written, sometimes read)
+# ---------------------------------------------------------------------------
+
+def _load_from_json_only() -> dict[str, Any]:
     with _LOCK:
         if not STORE.exists():
             return _fresh_memory()
@@ -88,12 +196,12 @@ def load_learning_memory() -> dict[str, Any]:
             return _fresh_memory()
 
 
-def _save_learning_memory(data: dict[str, Any]) -> None:
+def _write_json_compat(data: dict[str, Any]) -> None:
+    """Atomic write to the legacy JSON file. Always called on every save,
+    permanently (see module docstring) — this is not a transitional
+    measure."""
     with _LOCK:
         STORE.parent.mkdir(parents=True, exist_ok=True)
-        data = _migrate(data)
-        data["schema_version"] = SCHEMA_VERSION
-        data["updated_at"] = _now()
         handle, temporary = tempfile.mkstemp(
             prefix="jarvis_memory_",
             suffix=".json",
@@ -108,6 +216,153 @@ def _save_learning_memory(data: dict[str, Any]) -> None:
         finally:
             if os.path.exists(temporary):
                 os.remove(temporary)
+
+
+# ---------------------------------------------------------------------------
+# DB storage (Phase 2 primary path, once migrated data exists)
+# ---------------------------------------------------------------------------
+
+def _row_fingerprint(row: dict[str, Any]) -> str:
+    """Every legacy row already carries its own stable, unique `id`
+    (e.g. "PREF-A1B2C3D4E5") — reused directly as the DB dedup key
+    rather than inventing a second identifier scheme."""
+    row_id = _clean_text(row.get("id"), 64)
+    if row_id:
+        return row_id
+    # Defensive fallback for a malformed/legacy row with no id — should
+    # not happen via this module's own writers, but a hand-edited JSON
+    # file could lack one.
+    return hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def _load_from_db() -> dict[str, Any] | None:
+    """Returns the full memory dict from the DB, or None if this
+    organization has no migrated data yet (signaling the caller should
+    fall back to the legacy JSON file)."""
+    engine = _get_engine()
+    with session_scope(engine) as session:
+        org_id = _resolve_default_organization_id(session)
+        by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in _AUTHORED_KEYS}
+        latest_updated_at: datetime | None = None
+        total_rows = 0
+        for key, record_type in _RECORD_TYPE_BY_KEY.items():
+            rows = (
+                session.query(JarvisLearningRecord)
+                .filter(
+                    JarvisLearningRecord.organization_id == org_id,
+                    JarvisLearningRecord.record_type == record_type,
+                )
+                .order_by(JarvisLearningRecord.created_at.asc())
+                .all()
+            )
+            total_rows += len(rows)
+            for db_row in rows:
+                try:
+                    by_key[key].append(json.loads(db_row.payload))
+                except json.JSONDecodeError:
+                    continue
+                if latest_updated_at is None or db_row.updated_at > latest_updated_at:
+                    latest_updated_at = db_row.updated_at
+
+        if total_rows == 0:
+            return None  # not migrated yet — caller falls back to JSON
+
+        data = _fresh_memory()
+        for key in _AUTHORED_KEYS:
+            data[key] = by_key[key]
+        data["patterns"] = _derive_patterns(data["outcomes"])
+        data["updated_at"] = (
+            latest_updated_at.isoformat(timespec="seconds") if latest_updated_at else ""
+        )
+        return data
+
+
+def _write_to_db(data: dict[str, Any]) -> None:
+    """Full-sync upsert of all four authored collections for the default
+    organization. Simple (re-upserts every row on every save) rather
+    than diffing for the one row that actually changed — deliberately,
+    for correctness and simplicity at this deployment's scale (a single
+    clinic's Jarvis memory: dozens to low hundreds of rows, not
+    thousands). See docs/V2_PHASE2_JARVIS_MEMORY.md for this tradeoff if
+    usage ever grows large enough to matter."""
+    engine = _get_engine()
+    with session_scope(engine) as session:
+        org_id = _resolve_default_organization_id(session)
+        now = datetime.now(timezone.utc)
+        for key, record_type in _RECORD_TYPE_BY_KEY.items():
+            for row in data.get(key, []):
+                if not isinstance(row, dict):
+                    continue
+                fingerprint = _row_fingerprint(row)
+                existing = (
+                    session.query(JarvisLearningRecord)
+                    .filter(
+                        JarvisLearningRecord.organization_id == org_id,
+                        JarvisLearningRecord.record_type == record_type,
+                        JarvisLearningRecord.fingerprint == fingerprint,
+                    )
+                    .one_or_none()
+                )
+                payload = json.dumps(row, ensure_ascii=False, default=str)
+                if existing is not None:
+                    if existing.payload != payload:
+                        existing.payload = payload
+                        existing.updated_at = now
+                else:
+                    session.add(
+                        JarvisLearningRecord(
+                            organization_id=org_id,
+                            record_type=record_type,
+                            external_id=_clean_text(row.get("id"), 60) or None,
+                            fingerprint=fingerprint,
+                            payload=payload,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Public read/write chokepoints
+# ---------------------------------------------------------------------------
+
+def load_learning_memory() -> dict[str, Any]:
+    if not _DB_DISABLED:
+        try:
+            db_data = _load_from_db()
+            if db_data is not None:
+                return db_data
+        except SQLAlchemyError:
+            _LOG.error(
+                "Jarvis learning-memory DB read failed; falling back to the "
+                "legacy JSON file (%s).",
+                STORE,
+                exc_info=True,
+            )
+    return _load_from_json_only()
+
+
+def _save_learning_memory(data: dict[str, Any]) -> None:
+    with _LOCK:
+        data = _migrate(data)
+        data["schema_version"] = SCHEMA_VERSION
+        data["updated_at"] = _now()
+        # Always written first and unconditionally: this is the
+        # durability floor Jarvis has always had, and
+        # services/jarvis_context.py's LEARNING_FILE reads it directly —
+        # see module docstring.
+        _write_json_compat(data)
+        if not _DB_DISABLED:
+            try:
+                _write_to_db(data)
+            except SQLAlchemyError:
+                _LOG.error(
+                    "Jarvis learning-memory DB write failed; the legacy "
+                    "JSON file (%s) is up to date, but this write was not "
+                    "durably mirrored to the database.",
+                    STORE,
+                    exc_info=True,
+                )
 
 
 def save_owner_preference(

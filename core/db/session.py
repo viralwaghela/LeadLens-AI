@@ -39,7 +39,22 @@ def get_database_url(default_sqlite_path: Path | None = None) -> str:
     live in — no second production database. Falls back to a dedicated
     local SQLite file when unset (see module docstring for why it's a
     different file from core/memory.py's).
+
+    LEADLENS_V2_DATABASE_URL, if set, takes priority over DATABASE_URL.
+    Added in Phase 2 specifically so tests/_bootstrap.py can redirect
+    this layer to an isolated temp SQLite file without touching
+    DATABASE_URL itself — core.memory._database_url() hard-fails
+    (LEADLENS_TESTING guard) if DATABASE_URL is ever set during a test
+    run, so a separate variable was needed once services/jarvis_memory.py
+    (a genuinely live module, unlike everything else under core/db/ so
+    far) started actually depending on this database in tests. Not used
+    by production code today (DATABASE_URL alone still resolves the real
+    deployment's database there) — it's a test/ops escape hatch only.
     """
+    override = os.getenv("LEADLENS_V2_DATABASE_URL", "").strip()
+    if override:
+        return override
+
     raw = os.getenv("DATABASE_URL", "").strip()
     if raw:
         # SQLAlchemy's psycopg2 dialect requires the "postgresql://"

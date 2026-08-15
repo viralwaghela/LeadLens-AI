@@ -63,13 +63,15 @@ feature in its own right.
    product, but that requires a genuine multi-tenant rebuild — separate,
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
-   it first, since it's a significant architectural decision. **V2 Phase 0
-   and Phase 1 have been built** (a dormant, additive-only relational
-   schema, plus a dormant identity/authorization backend on top of it —
-   see "V2 migration" below) but the live app still runs entirely on the
-   single-row `memory_store` design and `core/auth.py`'s shared-password
-   login; Phase 0/1 do not change this gap,
-   it only lays groundwork for the phase that eventually will.
+   it first, since it's a significant architectural decision. **V2 Phase
+   0, 1, and 2 have been built** (a relational schema, an identity/
+   authorization backend on top of it, and — the one live exception —
+   Jarvis's learning-memory storage now genuinely runs through this
+   schema — see "V2 migration" below) but the live app's actual business
+   data still runs entirely on the single-row `memory_store` design and
+   `core/auth.py`'s shared-password login; none of these phases change
+   this gap, they only lay groundwork for the phase that eventually
+   will.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -97,25 +99,34 @@ feature in its own right.
   `services/learning_memory_v22.py` and
   `services/agent_collaboration_v23.py`).
 
-## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`)
+## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`)
 
 LeadLens V2 is an incremental brownfield migration, not a rewrite.
 **The legacy `core/memory.py` path remains the production source of
 truth, and `core/auth.py` remains the production login gate, until an
 explicit later phase changes either.** A relational SQLAlchemy/Alembic
-schema now exists (`core/db/`, `alembic/`, Phase 0), and a real
-identity/authorization backend is now built on top of it
-(`core/identity/`, Phase 1) — real users, Argon2id password hashing,
-organizations, memberships, a 7-role/25-permission RBAC model, and a
-7-step `authorize()` check (user active → org active → membership
-active → permission granted). Both are completely dormant — no live
-read or write path (`app.py`, `dashboard.py`, `core/auth.py`,
-`services/`, `ui/`, `scheduler/`) imports anything from `core/db/` or
-`core/identity/` yet. **Do not wire either into a live read/write or
-login path without that being its own explicit, discussed phase** —
-see `docs/V2_COEXISTENCE.md` for Phase 0's architecture and
-`docs/V2_PHASE1_IDENTITY.md` for Phase 1's, including the full role →
-permission matrix.
+schema exists (`core/db/`, `alembic/`, Phase 0), a real
+identity/authorization backend is built on top of it (`core/identity/`,
+Phase 1 — real users, Argon2id password hashing, organizations,
+memberships, a 7-role/25-permission RBAC model, a 7-step `authorize()`
+check), and **Phase 2 made `services/jarvis_memory.py` — Jarvis's
+learning-memory module — the first genuinely live consumer of this
+schema**: it now reads/writes `core/db/models/jarvis.py`'s
+`JarvisLearningRecord` table as its primary durable store, with the
+legacy `data/learning/learning_memory.json` file kept permanently in
+sync (both for pre-migration/DB-outage fallback and because
+`services/jarvis_context.py` reads that file directly for its own
+provenance display). Every other live file — `app.py`, `dashboard.py`,
+`core/auth.py`, the CRM, the scheduler, the approval/execution engine,
+the integrations — is still completely untouched; `core/db/` and
+`core/identity/` remain otherwise dormant outside this one path. **Do
+not wire multi-tenant routing, CRM reads/writes, or authentication into
+a live path without that being its own explicit, discussed phase** —
+see `docs/V2_COEXISTENCE.md` for Phase 0's architecture,
+`docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the full role →
+permission matrix), and `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's
+(including the rollback path — an env-var kill switch, no destructive
+DB changes needed).
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s

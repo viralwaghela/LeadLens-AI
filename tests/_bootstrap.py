@@ -34,11 +34,33 @@ hard-fails (LEADLENS_TESTING) if DATABASE_URL is ever set at the moment
 something actually tries to use it — a second, independent layer in
 case some future code path finds a way around the monkeypatch too.
 
+3. (Added in Phase 2.) services/jarvis_memory.py is a genuinely live
+   module — unlike everything else under core/db/ so far — and by
+   default writes to data/learning/learning_memory.json (a tracked
+   file) and, once migrated, to the V2 database. A test file that calls
+   it without redirecting jarvis_memory.STORE itself (several did — see
+   the Phase 2 audit that found tests/TEST_PHASES_21_TO_23.py silently
+   mutating the tracked JSON file on every test run) would corrupt
+   real, tracked runtime data or pollute the shared local V2 sqlite
+   file. Rather than rely on every test file remembering to redirect
+   both storage paths itself, this module sets two environment
+   variables — LEADLENS_LEARNING_MEMORY_PATH and
+   LEADLENS_V2_DATABASE_URL — to a private per-process temp directory
+   before anything else can import jarvis_memory.py, so this class of
+   mistake is structurally impossible rather than dependent on every
+   test file getting it right. Individual test files may still
+   monkeypatch jarvis_memory.STORE/_ENGINE directly for full per-test
+   isolation (several do); this is a safety net underneath that, not a
+   replacement for it.
+
 Usage, as the very first line of a test file:
 
     import _bootstrap  # noqa: F401  (must be first — see _bootstrap.py)
 """
+import atexit
 import os
+import shutil
+import tempfile
 
 import dotenv
 
@@ -66,3 +88,33 @@ def _guarded_load_dotenv(*args, **kwargs):
 
 
 dotenv.load_dotenv = _guarded_load_dotenv
+
+
+# --- Phase 2 safety net: isolate jarvis_memory.py's storage -----------------
+_TEST_STORAGE_DIR = tempfile.mkdtemp(prefix="leadlens_test_storage_")
+atexit.register(shutil.rmtree, _TEST_STORAGE_DIR, True)
+
+os.environ.setdefault(
+    "LEADLENS_LEARNING_MEMORY_PATH",
+    os.path.join(_TEST_STORAGE_DIR, "learning_memory.json"),
+)
+os.environ.setdefault(
+    "LEADLENS_V2_DATABASE_URL",
+    "sqlite:///" + os.path.join(_TEST_STORAGE_DIR, "v2_test.db").replace("\\", "/"),
+)
+
+try:
+    from core.db.base import Base as _V2Base
+    import core.db.models as _v2_models  # noqa: F401  (populates _V2Base.metadata)
+    from core.db.session import make_engine as _make_v2_engine
+
+    _v2_test_engine = _make_v2_engine()
+    _V2Base.metadata.create_all(_v2_test_engine)
+    _v2_test_engine.dispose()
+except Exception as _v2_setup_error:  # pragma: no cover - defensive only
+    # This is a safety net, not a hard requirement — if it fails for some
+    # reason (e.g. SQLAlchemy not installed in a minimal environment),
+    # don't take down every single test file's import over it. Tests
+    # that actually need the V2 schema will fail on their own with a
+    # clear error; this print just makes the root cause visible.
+    print(f"[tests/_bootstrap] Phase 2 V2 schema safety-net setup failed: {_v2_setup_error}")
