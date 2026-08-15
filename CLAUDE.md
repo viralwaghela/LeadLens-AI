@@ -64,14 +64,16 @@ feature in its own right.
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
    it first, since it's a significant architectural decision. **V2 Phase
-   0, 1, and 2 have been built** (a relational schema, an identity/
-   authorization backend on top of it, and — the one live exception —
-   Jarvis's learning-memory storage now genuinely runs through this
-   schema — see "V2 migration" below) but the live app's actual business
-   data still runs entirely on the single-row `memory_store` design and
-   `core/auth.py`'s shared-password login; none of these phases change
-   this gap, they only lay groundwork for the phase that eventually
-   will.
+   0, 1, 2, and 3 have been built** (a relational schema, an identity/
+   authorization backend on top of it, Jarvis's learning-memory storage
+   now genuinely running through this schema, and — Phase 3 — CRM writes
+   now also shadow-write into the relational schema behind a kill switch
+   that currently defaults OFF — see "V2 migration" below) but CRM
+   *reads*, Jarvis, the scheduler, approvals, integrations, and
+   `core/auth.py`'s shared-password login are all still exclusively
+   legacy; none of these phases change the multi-tenant gap itself, they
+   only lay groundwork for the phase that eventually will (a real live
+   tenant-routing cutover, not yet built).
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -109,24 +111,33 @@ schema exists (`core/db/`, `alembic/`, Phase 0), a real
 identity/authorization backend is built on top of it (`core/identity/`,
 Phase 1 — real users, Argon2id password hashing, organizations,
 memberships, a 7-role/25-permission RBAC model, a 7-step `authorize()`
-check), and **Phase 2 made `services/jarvis_memory.py` — Jarvis's
+check), **Phase 2 made `services/jarvis_memory.py` — Jarvis's
 learning-memory module — the first genuinely live consumer of this
-schema**: it now reads/writes `core/db/models/jarvis.py`'s
+schema** (reads/writes `core/db/models/jarvis.py`'s
 `JarvisLearningRecord` table as its primary durable store, with the
 legacy `data/learning/learning_memory.json` file kept permanently in
-sync (both for pre-migration/DB-outage fallback and because
-`services/jarvis_context.py` reads that file directly for its own
-provenance display). Every other live file — `app.py`, `dashboard.py`,
-`core/auth.py`, the CRM, the scheduler, the approval/execution engine,
-the integrations — is still completely untouched; `core/db/` and
-`core/identity/` remain otherwise dormant outside this one path. **Do
-not wire multi-tenant routing, CRM reads/writes, or authentication into
-a live path without that being its own explicit, discussed phase** —
-see `docs/V2_COEXISTENCE.md` for Phase 0's architecture,
+sync), and **Phase 3 made `services/clinic_data_service.py` — every CRM
+mutation — shadow-write into the Phase 0 relational CRM tables**
+(`core/db/models/clinic.py`) via `services/relational_sync_service.py`,
+behind `LEADLENS_V2_DUAL_WRITE_ENABLED` (**defaults OFF**). The legacy
+`memory_store` write is always authoritative; a relational shadow-write
+failure is caught, classified, and recorded
+(`core/db/models/shadow_sync.py`'s `ShadowSyncFailure`) rather than
+ever rolling back or blocking the legacy CRM operation — see
+`docs/V2_PHASE3_CRM_DUAL_WRITE.md`. **CRM reads are still 100% legacy**
+— Phase 3 is write-only, by design. Every other live file — `app.py`,
+`dashboard.py`, `core/auth.py`, the scheduler, the approval/execution
+engine, the integrations — is still completely untouched. **Do not wire
+multi-tenant routing, CRM reads, or authentication into a live path
+without that being its own explicit, discussed phase** — see
+`docs/V2_COEXISTENCE.md` for Phase 0's architecture,
 `docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the full role →
-permission matrix), and `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's
-(including the rollback path — an env-var kill switch, no destructive
-DB changes needed).
+permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's, and
+`docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including the full
+CRM mutation-surface audit, the known `marketing-site/api/lead.py`
+bypass, and the recommended production deployment sequence). Every
+phase's rollback is the same shape — an env-var kill switch, no
+destructive DB changes needed.
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
@@ -134,9 +145,11 @@ own "Do not rebuild" section for the full reasoning per item):
 specialist orchestration, the approval/execution engine, automation
 qualification logic in `scheduler/run_scheduled_checks.py`, the
 integration adapters' actual API-calling code in `integrations/*.py`,
-the current Streamlit UI, the Docker foundation. Phase 1 adds one more
-item to this list: do not wire `core/identity/` into `core/auth.py` or
-any UI login form without that being its own explicit, discussed phase.
+the current Streamlit UI, the Docker foundation. Phase 1 adds: do not
+wire `core/identity/` into `core/auth.py` or any UI login form without
+that being its own explicit, discussed phase. Phase 3 adds: do not wire
+`relational_sync_service` into any CRM **read** path without that being
+its own explicit, discussed phase.
 
 ## Automation roadmap
 

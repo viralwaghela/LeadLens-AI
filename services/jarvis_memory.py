@@ -53,7 +53,11 @@ from sqlalchemy.orm import Session
 
 from core.db.models.jarvis import JarvisLearningRecord, JarvisLearningRecordType
 from core.db.session import make_engine, session_scope
-from core.identity.organization_service import create_organization, get_organization_by_slug
+from core.identity.default_organization import (
+    DEFAULT_ORGANIZATION_NAME,
+    DEFAULT_ORGANIZATION_SLUG,
+    resolve_default_organization_id,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,14 +82,12 @@ _DB_DISABLED = os.getenv("LEADLENS_JARVIS_MEMORY_DB_DISABLED", "").strip().lower
     "1", "true", "yes",
 }
 
-# Single-clinic bootstrap default. Not live tenant routing — there is no
-# per-request/per-user organization context anywhere in the live app yet
-# (see CLAUDE.md's multi-tenancy gap) — this is only the one fixed
-# organization this Phase 2 storage layer writes to today, resolved
-# fresh (get-or-create by slug) on every DB access rather than cached,
-# so tests can freely swap engines without stale-ID bugs.
-DEFAULT_ORGANIZATION_SLUG = os.getenv("LEADLENS_DEFAULT_ORG_SLUG", "default-clinic")
-DEFAULT_ORGANIZATION_NAME = "Default Clinic"
+# DEFAULT_ORGANIZATION_SLUG / DEFAULT_ORGANIZATION_NAME are imported above
+# from core.identity.default_organization (Phase 3 extracted this
+# single-clinic bootstrap default into a shared module so Jarvis's
+# learning-memory shadow store and Phase 3's CRM relational shadow store
+# resolve to the same organization — re-exported here under their
+# original names so nothing importing them from jarvis_memory breaks).
 
 # Lazily created, cached engine. Tests override this directly
 # (patch.object(jarvis_memory, "_ENGINE", test_engine)), exactly like the
@@ -166,20 +168,6 @@ def _get_engine():
         return _ENGINE
 
 
-def _resolve_default_organization_id(session: Session) -> int:
-    """Get-or-create the single default organization this deployment's
-    Jarvis memory is scoped to. Resolved fresh every call (not cached)
-    so tests can swap engines without stale-ID bugs — this deployment
-    has at most a handful of Jarvis-memory DB calls per user action, so
-    the extra SELECT is not a meaningful cost. See module docstring for
-    why this is bootstrap plumbing, not live tenant routing."""
-    org = get_organization_by_slug(session, DEFAULT_ORGANIZATION_SLUG)
-    if org is not None:
-        return org.id
-    org = create_organization(
-        session, name=DEFAULT_ORGANIZATION_NAME, slug=DEFAULT_ORGANIZATION_SLUG
-    )
-    return org.id
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +229,7 @@ def _load_from_db() -> dict[str, Any] | None:
     fall back to the legacy JSON file)."""
     engine = _get_engine()
     with session_scope(engine) as session:
-        org_id = _resolve_default_organization_id(session)
+        org_id = resolve_default_organization_id(session)
         by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in _AUTHORED_KEYS}
         latest_updated_at: datetime | None = None
         total_rows = 0
@@ -287,7 +275,7 @@ def _write_to_db(data: dict[str, Any]) -> None:
     usage ever grows large enough to matter."""
     engine = _get_engine()
     with session_scope(engine) as session:
-        org_id = _resolve_default_organization_id(session)
+        org_id = resolve_default_organization_id(session)
         now = datetime.now(timezone.utc)
         for key, record_type in _RECORD_TYPE_BY_KEY.items():
             for row in data.get(key, []):

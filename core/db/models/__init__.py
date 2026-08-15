@@ -13,5 +13,9 @@ from core.db.models import identity_audit  # noqa: F401
 from core.db.models import jarvis  # noqa: F401
 from core.db.models import operations  # noqa: F401
 from core.db.models import organization  # noqa: F401
+from core.db.models import shadow_sync  # noqa: F401
 
-__all__ = ["clinic", "identity", "identity_audit", "jarvis", "operations", "organization"]
+__all__ = [
+    "clinic", "identity", "identity_audit", "jarvis", "operations",
+    "organization", "shadow_sync",
+]

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime
 from typing import Any, Iterable
 
 from core.memory import load_memory, update_memory
+
+_LOG = logging.getLogger(__name__)
 
 # Second element of each tuple is the key this entity lives under in
 # core.memory's business-memory store (SQLite locally, Postgres in
@@ -55,6 +58,23 @@ LEAD_STATUSES = {
     "Archived",
 }
 LEAD_SOURCES = {"Website", "Phone", "Walk-in", "Referral", "Other"}
+
+
+def _shadow_sync(entity: str, row: dict[str, Any], *, operation: str) -> None:
+    """Phase 3: best-effort relational shadow write, called only after
+    the legacy write above has already succeeded and been saved. Legacy
+    memory_store remains authoritative — see
+    docs/V2_PHASE3_CRM_DUAL_WRITE.md. services.relational_sync_service's
+    own sync_upsert() already never raises (every failure is caught,
+    classified, and recorded there); this local try/except is a second,
+    redundant layer specifically because this is a live CRM write path
+    that must never fail due to Phase 3 code, no matter what."""
+    try:
+        from services.relational_sync_service import sync_upsert
+
+        sync_upsert(entity, row, operation=operation)
+    except Exception:  # noqa: BLE001 - must never break a CRM mutation
+        _LOG.error("V2 shadow sync raised unexpectedly for %s (%s).", entity, operation, exc_info=True)
 
 
 def _now() -> str:
@@ -386,6 +406,7 @@ def add_record(entity: str, data: dict[str, Any]) -> dict[str, Any]:
     row["updated_at"] = timestamp
     rows.append(row)
     save_records(entity, rows)
+    _shadow_sync(entity, row, operation="create")
     return row
 
 
@@ -423,6 +444,7 @@ def update_record(
             merged["updated_at"] = _now()
             rows[index] = merged
             save_records(entity, rows)
+            _shadow_sync(entity, merged, operation="update")
             return merged
     raise KeyError(f"{entity.rstrip('s').title()} {record_id} was not found.")
 
