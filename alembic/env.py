@@ -24,7 +24,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 
 load_dotenv()
 
@@ -39,15 +39,20 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override whatever alembic.ini's sqlalchemy.url placeholder says with the
-# same DATABASE_URL resolution core/memory.py and core/db/session.py use.
-config.set_main_option("sqlalchemy.url", get_database_url())
+# Resolved once, kept as a plain Python value — deliberately NOT passed
+# through config.set_main_option()/config.get_main_option(). Those go
+# through Python's ConfigParser, which uses "%" for interpolation, so
+# any password containing a literal "%" (e.g. a URL-encoded "@" as
+# "%40" — a real production password this hit) raises
+# "invalid interpolation syntax" and breaks every Alembic command
+# outright. Found running Alembic against a real deployment's Postgres
+# for the first time; SQLite-only testing never exercised this path.
+_database_url = get_database_url()
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=_database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -57,11 +62,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    from core.db.session import make_engine
+
+    connectable = make_engine(_database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
