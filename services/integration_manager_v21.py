@@ -53,8 +53,41 @@ def _current_tenant_context():
         return None
 
 
-def _whatsapp_client() -> WhatsAppBusinessService:
-    context = _current_tenant_context()
+def _resolve_item_execution_context(item: dict[str, Any]):
+    """Phase 6.1 — execute_item()'s trust boundary. Derives the operating
+    TenantContext strictly from the queue item's own stamped
+    `organization_id` (set by prepare_execution() at creation time) —
+    never the transitional default, never a caller-supplied value,
+    never a fallback of any kind. A missing, malformed, nonexistent, or
+    inactive organization fails closed (returns None); the caller must
+    refuse to execute rather than substitute any other organization's
+    context. This is the fix for the Phase 6 audit finding that
+    execute_item() previously resolved the transitional/default context
+    unconditionally instead of deriving it from the item."""
+    org_id = item.get("organization_id")
+    if not isinstance(org_id, int) or isinstance(org_id, bool) or org_id <= 0:
+        return None
+    try:
+        from core.db.models.organization import OrganizationStatus
+        from core.db.session import session_scope
+        from core.identity.organization_service import get_organization
+        from core.identity.tenant_context import ActorType, build_system_context
+        from services.integration_credentials import _get_engine
+
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            org = get_organization(session, org_id)
+            if org is None or org.status != OrganizationStatus.ACTIVE:
+                return None
+            return build_system_context(
+                session, organization_id=org.id, actor_type=ActorType.SYSTEM, source="execute_item",
+            )
+    except Exception:  # noqa: BLE001 - any failure must fail closed, never fall back
+        return None
+
+
+def _whatsapp_client(context=None) -> WhatsAppBusinessService:
+    context = context or _current_tenant_context()
     if context is None:
         return WhatsAppBusinessService()
     from services.integration_clients import get_whatsapp_client
@@ -62,8 +95,8 @@ def _whatsapp_client() -> WhatsAppBusinessService:
     return get_whatsapp_client(context)
 
 
-def _gmail_client() -> GmailService:
-    context = _current_tenant_context()
+def _gmail_client(context=None) -> GmailService:
+    context = context or _current_tenant_context()
     if context is None:
         return GmailService()
     from services.integration_clients import get_gmail_client
@@ -71,8 +104,8 @@ def _gmail_client() -> GmailService:
     return get_gmail_client(context)
 
 
-def _calendar_client() -> GoogleCalendarService:
-    context = _current_tenant_context()
+def _calendar_client(context=None) -> GoogleCalendarService:
+    context = context or _current_tenant_context()
     if context is None:
         return GoogleCalendarService()
     from services.integration_clients import get_calendar_client
@@ -172,8 +205,19 @@ def prepare_execution(
     *,
     recommendation_id: str = "",
     impact: str = "",
+    tenant_context=None,
 ) -> dict[str, Any]:
-    """Validate and store an action, then create its unique approval."""
+    """Validate and store an action, then create its unique approval.
+
+    Phase 6.1: every prepared action is stamped with the resolved
+    organization_id (explicit `tenant_context`, or the same transitional
+    default every existing caller has always effectively used) on both
+    the approval and the queue item, so execute_item() can later derive
+    its own execution context strictly from the item — never from an
+    ambient default. If no organization can be resolved at all (e.g.
+    the database is unreachable), the action is deliberately not
+    prepared: creating an item with no provable tenant identity would
+    only defer today's failure into a confusing one at execution time."""
     provider, action, payload = _validate(provider, action, payload)
     fingerprint = _fingerprint(provider, action, payload)
     rows = _load()
@@ -190,6 +234,12 @@ def prepare_execution(
     )
     if existing:
         return copy.deepcopy(existing)
+
+    context = tenant_context or _current_tenant_context()
+    if context is None:
+        raise RuntimeError(
+            "Could not resolve an organization context; action was not prepared."
+        )
 
     item_id = f"EXEC-{uuid4().hex[:10].upper()}"
     clean_title = _clean(
@@ -208,6 +258,7 @@ def prepare_execution(
         "status": "Pending",
         "execution_id": item_id,
         "recommendation_id": _clean(recommendation_id, 40),
+        "organization_id": context.organization_id,
     })
     item = {
         "id": item_id,
@@ -221,6 +272,7 @@ def prepare_execution(
         "approval_status": "Pending",
         "status": "Awaiting approval",
         "fingerprint": fingerprint,
+        "organization_id": context.organization_id,
         "created_at": _now(),
         "approved_at": "",
         "executed_at": "",
@@ -320,22 +372,49 @@ def execute_item(item_id: str) -> dict[str, Any]:
             "detail": f"Approval status is {approval_status}.",
         }
 
+    # Phase 6.1: derive the execution TenantContext strictly from the
+    # item's own stamped organization_id — see
+    # _resolve_item_execution_context()'s docstring for the trust
+    # boundary this enforces. Never falls back to the transitional
+    # default or any other organization.
+    context = _resolve_item_execution_context(item)
+    if context is None:
+        return {
+            "success": False,
+            "status": "blocked",
+            "detail": "Could not resolve a valid, active organization for this queued action.",
+        }
+
+    # Section 7 defense-in-depth: an approval and its queue item are
+    # always stamped with the same organization_id at creation time
+    # (prepare_execution()) — this is a belt-and-braces check, not the
+    # primary mechanism, since nothing in this codebase can create a
+    # mismatched pair through normal use.
+    approval_row = _get_approval_row(item.get("approval_id", ""))
+    approval_org_id = (approval_row or {}).get("data", {}).get("organization_id")
+    if approval_org_id is not None and approval_org_id != context.organization_id:
+        return {
+            "success": False,
+            "status": "blocked",
+            "detail": "Approval organization does not match queue item organization.",
+        }
+
     provider, action, payload = _validate(
         item["provider"],
         item["action"],
         item["payload"],
     )
     if provider == "calendar":
-        result = _calendar_client().create_event(payload)
+        result = _calendar_client(context).create_event(payload)
     elif provider == "gmail":
-        service = _gmail_client()
+        service = _gmail_client(context)
         result = (
             service.create_draft(payload)
             if action == "create_draft"
             else service.send_email(payload)
         )
     else:
-        result = _whatsapp_client().send_text(payload)
+        result = _whatsapp_client(context).send_text(payload)
 
     result_dict = result.to_dict()
     item["result"] = result_dict

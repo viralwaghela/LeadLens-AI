@@ -136,12 +136,24 @@ _SECRET_FIELD_NAMES = {
 
 
 def redact(value: Any) -> Any:
-    """Best-effort defensive redaction for anything that might end up in
-    a log line, exception message, or admin-facing response. Not the
-    primary safety mechanism (callers should simply never pass secrets
-    into logs/exceptions in the first place — see
-    services/integration_credentials.py) but a second layer in case a
-    dict containing secret-shaped keys is ever stringified by mistake."""
+    """Phase 6.1 decision (Phase 6 audit finding — this function existed
+    but was wired into nothing): kept as an opt-in utility, NOT wired
+    into any live call path. Nothing in this codebase currently needs
+    it — services/integration_credentials.py's `_audit()` builds its
+    detail string from a hardcoded template (provider name + error
+    category only, never the actual secret/config dict), every adapter
+    in integrations/*.py builds its IntegrationResult.detail from
+    str(exception) rather than from a credentials dict, and
+    safe_metadata() excludes encrypted_credentials structurally rather
+    than by redaction. The enforced safety property is therefore
+    structural (no code path passes a secret-containing dict into a
+    log/exception/audit call in the first place), not this function.
+
+    This is available for a future caller that genuinely needs to
+    safely stringify a dict that might contain credential-shaped keys
+    (e.g. a future admin API/UI response formatter, or a debug dump) —
+    use it there rather than adding new logging of credential dicts
+    just to give this function a caller."""
     if isinstance(value, dict):
         return {
             key: ("***REDACTED***" if str(key).lower() in _SECRET_FIELD_NAMES else redact(val))

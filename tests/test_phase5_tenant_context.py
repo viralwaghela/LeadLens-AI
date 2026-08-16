@@ -18,6 +18,7 @@ import core.memory as business_memory
 import services.clinic_data_service as crm
 import services.crm_read_router as router
 import services.integration_manager_v21 as mgr
+import services.integration_credentials as ic
 import services.relational_sync_service as rs
 import services.security_service as security_service
 import services.tenant_operational_sync as tos
@@ -54,6 +55,13 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(router, "_ENGINE", engine)
     monkeypatch.setattr(tos, "_ENGINE", engine)
     monkeypatch.setattr(tos, "TENANT_CONTEXT_ENABLED", True)
+    # Phase 6.1: prepare_execution() now resolves its TenantContext via
+    # services/integration_credentials.py's shared engine helper (the
+    # same fix that made execute_item()'s org resolution consistent
+    # with credential resolution) — this must point at the same
+    # isolated DB as everything else here, or organization ids stamped
+    # on approvals/queue items won't resolve against tos._ENGINE.
+    monkeypatch.setattr(ic, "_ENGINE", engine)
     monkeypatch.setattr(
         "core.identity.default_organization.DEFAULT_ORGANIZATION_SLUG", ORG_SLUG
     )

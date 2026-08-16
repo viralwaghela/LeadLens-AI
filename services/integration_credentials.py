@@ -179,7 +179,21 @@ def configure_integration(
     previously-stored secret untouched, so a caller can update just
     configuration without re-supplying the secret). Transactional: the
     encrypt + upsert + flush happen as one unit: either the whole update
-    lands or none of it does (spec section 27)."""
+    lands or none of it does (spec section 27).
+
+    Phase 6.1 status fix (Phase 6 audit finding): status is no longer
+    set to ACTIVE unconditionally.
+      - `secret_fields` supplied (a secret was just configured/
+        reconfigured) -> ACTIVE, and any prior error state is cleared —
+        this is the one "reconfigure/reactivate" action in this API.
+      - `secret_fields` omitted AND no secret has ever been stored on
+        this row -> UNCONFIGURED. Non-secret configuration alone (e.g.
+        just a phone_number_id) never makes an integration usable.
+      - `secret_fields` omitted AND a secret already exists -> status is
+        left exactly as it was (ACTIVE stays ACTIVE, DISABLED stays
+        DISABLED, ERROR stays ERROR) — a config-only update never
+        silently reactivates a disabled integration or clears an error
+        it didn't actually fix."""
     row = get_integration(session, tenant_context.organization_id, provider)
     if row is None:
         row = OrganizationIntegration(
@@ -199,9 +213,14 @@ def configure_integration(
         merged.update(configuration_fields)
         row.configuration = json.dumps(merged, ensure_ascii=False, default=str)
 
-    row.status = IntegrationStatus.ACTIVE
-    row.last_error_at = None
-    row.last_error_code = None
+    if secret_fields is not None:
+        row.status = IntegrationStatus.ACTIVE
+        row.last_error_at = None
+        row.last_error_code = None
+    elif row.encrypted_credentials is None:
+        row.status = IntegrationStatus.UNCONFIGURED
+    # else: a secret already exists and none was supplied this call —
+    # status is intentionally left untouched.
     session.flush()
 
     _audit(actor, "integration_configured", provider, tenant_context.organization_id)

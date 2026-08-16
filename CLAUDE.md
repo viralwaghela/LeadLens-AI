@@ -191,7 +191,23 @@ dry-run-capable, idempotent, never overwrites an existing tenant
 credential without `--force`, never prints a secret) and
 `scripts/verify_integration_credentials.py` (safe status report, never
 a secret value) support the migration. OpenAI/LLM credentials remain
-platform-scoped, deliberately not made tenant-specific. See
+platform-scoped, deliberately not made tenant-specific. **Phase 6.1**
+(a focused hardening pass on top of Phase 6, no new files/migrations)
+fixed three Phase 6 audit findings: `execute_item()` now derives its
+`TenantContext` strictly from the queue item's own `organization_id`
+(stamped by `prepare_execution()` at creation time, on both the
+approval and the item — no fallback to the transitional default on a
+missing/nonexistent/inactive organization, which fails execution
+closed instead); `configure_integration()` no longer marks a fresh,
+secret-less integration `ACTIVE`; `credential_encryption.redact()` is
+documented as an intentionally-unwired opt-in utility rather than
+wired into a contrived call site. **One real behavioral consequence to
+know about**: any execution-queue item that existed *before* Phase 6.1
+shipped has no `organization_id` and will now fail closed (`blocked`)
+at `execute_item()` time rather than executing — acceptable for this
+pre-production, single-clinic deployment, but worth knowing if old
+"Approved" items are ever found stuck in the Action Center after this
+deploys; re-preparing the action resolves it. See
 `docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for the full audit,
 architecture, and adversarial test suite
 (`tests/test_phase6_integration_credentials.py`). Every other live

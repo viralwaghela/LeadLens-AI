@@ -80,22 +80,17 @@ def test_configure_without_secret_never_resolves_a_usable_credential(isolated) -
     assert result is None
 
 
-def test_configure_without_secret_status_is_never_silently_active_with_empty_secret(isolated) -> None:
-    """Documents current behavior precisely (audit finding, not
-    necessarily exploitable): configure_integration() sets status=ACTIVE
-    unconditionally, even when only configuration_fields is supplied and
-    no secret has ever been stored. This does not leak cross-tenant data
-    (resolve_credentials still fails closed via a decryption error), but
-    the row's status field is a misleading ACTIVE with an empty
-    encrypted_credentials rather than staying UNCONFIGURED."""
+def test_configure_without_secret_status_stays_unconfigured(isolated) -> None:
+    """Phase 6.1 fix (was a Phase 6 audit finding): configure_integration()
+    no longer sets status=ACTIVE unconditionally. A fresh row with only
+    configuration_fields and no secret ever supplied must stay
+    UNCONFIGURED, not misleadingly ACTIVE."""
     with Session(isolated) as session:
         org = organization_service.create_organization(session, name="Status Wart Org", slug="status-wart-org")
         context = _context(org.id)
         row = ic.configure_integration(session, context, IntegrationProvider.WHATSAPP, configuration_fields={"phone_number_id": "PHONE-ONLY"})
         session.commit()
-        # This assertion documents the current (surprising) behavior so a
-        # future change is a deliberate decision, not an accidental drift.
-        assert row.status == IntegrationStatus.ACTIVE
+        assert row.status == IntegrationStatus.UNCONFIGURED
         assert row.encrypted_credentials is None
 
 

@@ -75,6 +75,39 @@ def _resolve_context() -> TenantContext | None:
         return None
 
 
+def _resolve_context_for(organization_id: int | None) -> TenantContext | None:
+    """Phase 6.1: approvals and execution-queue items created by
+    prepare_execution() now carry their own stamped `organization_id` —
+    when present, this is the organization the shadow copy MUST land
+    under, never the transitional default (which could misattribute a
+    real organization's approval/item to a different org's shadow row
+    once more than one organization genuinely exists). Falls back to
+    the transitional resolver only when `organization_id` is absent
+    entirely — legacy items created before Phase 6.1 shipped, or a
+    caller that never had one to begin with. An explicitly-supplied but
+    invalid/inactive organization_id returns None (skip) rather than
+    silently substituting the transitional org — same fail-closed rule
+    as everywhere else in this module."""
+    if organization_id is None:
+        return _resolve_context()
+    try:
+        from core.db.models.organization import OrganizationStatus
+        from core.identity.organization_service import get_organization
+        from core.identity.tenant_context import ActorType, build_system_context
+
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            org = get_organization(session, organization_id)
+            if org is None or org.status != OrganizationStatus.ACTIVE:
+                return None
+            return build_system_context(
+                session, organization_id=org.id, actor_type=ActorType.SYSTEM, source="tenant_operational_sync",
+            )
+    except Exception:  # noqa: BLE001 - resolution failure must never break the caller
+        _LOG.error("tenant_resolution_failed for operational shadow sync (explicit organization_id).", exc_info=True)
+        return None
+
+
 def _safe(fn_name: str, entity: str, fn, *args, **kwargs) -> None:
     if not TENANT_CONTEXT_ENABLED:
         return
@@ -112,7 +145,11 @@ def _sync_approval(session: Session, org_id: int, legacy_approval: dict[str, Any
 
 def sync_approval(legacy_approval: dict[str, Any]) -> None:
     def _run():
-        context = _resolve_context()
+        # core.memory.add_memory_entry() wraps every entry's fields
+        # under "data" — organization_id was stamped there by
+        # prepare_execution(), not at this dict's top level.
+        organization_id = legacy_approval.get("data", {}).get("organization_id")
+        context = _resolve_context_for(organization_id)
         if context is None:
             return
         engine = _get_engine()
@@ -175,7 +212,10 @@ def _map_execution_status(value: Any) -> ExecutionStatus:
 
 def sync_execution_queue_item(legacy_item: dict[str, Any]) -> None:
     def _run():
-        context = _resolve_context()
+        # Execution-queue item dicts are flat (unlike approvals, which
+        # are wrapped by core.memory.add_memory_entry()) — organization_id
+        # was stamped directly on this dict by prepare_execution().
+        context = _resolve_context_for(legacy_item.get("organization_id"))
         if context is None:
             return
         engine = _get_engine()

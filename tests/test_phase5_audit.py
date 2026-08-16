@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 import core.memory as business_memory
 import services.crm_read_router as router
+import services.integration_credentials as ic
 import services.integration_manager_v21 as mgr
 import services.relational_sync_service as rs
 import services.security_service as security_service
@@ -42,6 +43,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(router, "_ENGINE", engine)
     monkeypatch.setattr(tos, "_ENGINE", engine)
     monkeypatch.setattr(tos, "TENANT_CONTEXT_ENABLED", True)
+    # Phase 6.1: prepare_execution() resolves its TenantContext via
+    # services/integration_credentials.py's shared engine helper — must
+    # point at the same isolated DB as everything else here.
+    monkeypatch.setattr(ic, "_ENGINE", engine)
     monkeypatch.setattr("core.identity.default_organization.DEFAULT_ORGANIZATION_SLUG", ORG_SLUG)
     yield engine
     engine.dispose()
