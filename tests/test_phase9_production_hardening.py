@@ -160,7 +160,9 @@ def test_production_readiness_aggregates_all_sections(tmp_path, monkeypatch) -> 
 
     overall, results = run_production_readiness()
     assert overall in ("PASS", "WARN", "FAIL")
-    assert set(results.keys()) == {"configuration", "health", "migration_drift", "tenant_integrity"}
+    assert set(results.keys()) == {
+        "configuration", "health", "integration_credentials", "migration_drift", "tenant_integrity",
+    }
     for level, _lines in results.values():
         assert level in ("PASS", "WARN", "FAIL")
 

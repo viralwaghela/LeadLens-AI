@@ -420,3 +420,142 @@ def resolve_provider_credentials(tenant_context: TenantContext, provider: Integr
     except Exception:  # noqa: BLE001 - resolution failure must never crash the caller
         _LOG.error("Phase 6 credential resolution failed for %s.", provider.value, exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Phase 9.1 — multi-organization credential health for
+# scripts/health_check.py / scripts/production_readiness.py.
+#
+# The Phase 9 audit found both existing checks were effectively
+# single-organization: check_credential_encryption() decided severity
+# from feature-flag INTENT (LEADLENS_V2_AUTH_ENABLED /
+# LEADLENS_V2_TENANT_CONTEXT_ENABLED) rather than whether any real,
+# stored OrganizationIntegration row actually needs the key;
+# check_integration_configuration() only ever looked at the transitional
+# default organization via integration_statuses(). Both functions below
+# fix that by enumerating actual database state across every relevant
+# organization — never a flag, never just the default org.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IntegrationHealthEntry:
+    """One (organization, provider) status line — safe to print/log in
+    full. Never carries a secret, ciphertext, or key value."""
+
+    organization_id: int
+    organization_slug: str
+    organization_active: bool
+    provider: str
+    status: str  # "ACTIVE" | "DISABLED" | "ERROR" | "UNCONFIGURED"
+    decryptable: bool | None  # None when not applicable (no stored ciphertext, or not ACTIVE)
+    error_category: str | None  # "key_unavailable" | "decryption_failed" | None
+
+
+def credential_encryption_key_required(session: Session) -> bool:
+    """True if ANY OrganizationIntegration row anywhere (any organization,
+    any status — a DISABLED row still holds ciphertext that needs the key
+    to ever be read again) has a stored encrypted payload. This is the
+    Phase 9.1 fix for defect #1: whether the master key is actually
+    needed is a question about STORED DATA, never about whether a V2
+    feature flag happens to be on."""
+    return (
+        session.query(OrganizationIntegration.id)
+        .filter(
+            OrganizationIntegration.encrypted_credentials.isnot(None),
+            OrganizationIntegration.encrypted_credentials != "",
+        )
+        .first()
+        is not None
+    )
+
+
+def assess_integration_health(
+    session: Session, *, include_inactive_organizations: bool = False,
+) -> list[IntegrationHealthEntry]:
+    """Enumerates every (organization, provider) pair — ACTIVE
+    organizations only by default (the "current runtime health" view;
+    pass include_inactive_organizations=True for a full integrity-mode
+    sweep, per Phase 9.1 spec section 7's policy) — across ALL three
+    providers, not just whichever the transitional default organization
+    happens to have configured. For each row with stored ciphertext whose
+    status is ACTIVE **or** ERROR, attempts a read-only decryption
+    (decrypt_credential_fields never mutates the row, and this function
+    never calls session.flush()/commit() — diagnostic only, never writes
+    back status/last_error/ciphertext) purely to classify healthy vs.
+    undecryptable; the decrypted plaintext itself is never returned or
+    logged — only the boolean outcome and a safe error category. One
+    query for organizations, one for integration rows — no per-row query
+    in a loop (Phase 9.1 spec section 12).
+
+    Phase 9.1.1 fix: ERROR-status rows are now decrypt-attempted exactly
+    like ACTIVE ones. In this codebase, `resolve_credentials()` is the
+    only place that ever sets IntegrationStatus.ERROR, and it does so
+    only after a real decryption failure (`last_error_code` is always
+    "key_unavailable" or "decryption_failed" — see services/
+    integration_credentials.py's resolve_credentials()) — so an ERROR
+    row always has genuine encrypted_credentials worth re-checking, never
+    a provider/connectivity-only failure (this module makes no live API
+    calls). Re-attempting decryption here (rather than trusting the
+    row's persisted last_error_code) keeps a single source of truth for
+    classification, matches how ACTIVE rows are already checked, and
+    means a row whose key was subsequently fixed correctly reports
+    decryptable=True even while its administrative status is still
+    ERROR (status and decryptable are reported as two separate fields on
+    purpose — status is never overwritten to reflect that, since only an
+    explicit reconfigure_integration() call may change administrative
+    status)."""
+    from core.db.models.organization import Organization, OrganizationStatus
+
+    org_query = session.query(Organization)
+    if not include_inactive_organizations:
+        org_query = org_query.filter(Organization.status == OrganizationStatus.ACTIVE)
+    organizations = org_query.all()
+    org_ids = [org.id for org in organizations]
+    if not org_ids:
+        return []
+
+    rows = (
+        session.query(OrganizationIntegration)
+        .filter(OrganizationIntegration.organization_id.in_(org_ids))
+        .all()
+    )
+    rows_by_org_provider = {(row.organization_id, row.provider): row for row in rows}
+
+    entries: list[IntegrationHealthEntry] = []
+    for org in organizations:
+        for provider in IntegrationProvider:
+            row = rows_by_org_provider.get((org.id, provider))
+            if row is None:
+                entries.append(IntegrationHealthEntry(
+                    organization_id=org.id, organization_slug=org.slug,
+                    organization_active=org.status == OrganizationStatus.ACTIVE,
+                    provider=provider.value, status="UNCONFIGURED",
+                    decryptable=None, error_category=None,
+                ))
+                continue
+
+            decryptable: bool | None = None
+            error_category: str | None = None
+            if row.status in (IntegrationStatus.ACTIVE, IntegrationStatus.ERROR) and row.encrypted_credentials:
+                try:
+                    from services.credential_encryption import EncryptionKeyUnavailable
+
+                    decrypt_credential_fields(row.encrypted_credentials, row.encryption_key_version or 1)
+                    decryptable = True
+                except EncryptionKeyUnavailable:
+                    decryptable = False
+                    error_category = "key_unavailable"
+                except CredentialDecryptionError:
+                    decryptable = False
+                    error_category = "decryption_failed"
+                except Exception:  # noqa: BLE001 - a health check must never raise out
+                    decryptable = False
+                    error_category = "unknown_error"
+            entries.append(IntegrationHealthEntry(
+                organization_id=org.id, organization_slug=org.slug,
+                organization_active=org.status == OrganizationStatus.ACTIVE,
+                provider=provider.value, status=row.status.value,
+                decryptable=decryptable, error_category=error_category,
+            ))
+    return entries

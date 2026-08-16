@@ -161,38 +161,136 @@ def check_scheduler_readiness() -> CheckOutcome:
         return CheckOutcome("scheduler_readiness", UNHEALTHY, f"{type(exc).__name__}: {exc}")
 
 
+def _integration_health_snapshot():
+    """Returns (required: bool, entries: list[IntegrationHealthEntry]) from
+    actual database state, or (None, None) if the check itself couldn't
+    run (DB unreachable, etc. — caller decides how to treat that). Both
+    check_credential_encryption() and check_integration_configuration()
+    derive their verdict from this SAME real-decryption-attempt data
+    (services.integration_credentials.assess_integration_health()) so
+    they can never disagree with each other the way a syntax-only key
+    check could — a "wrong but well-formed" key must be caught by
+    actually attempting decryption, not by checking presence alone."""
+    try:
+        from core.db.session import get_database_url, make_engine, session_scope
+        from services.integration_credentials import (
+            assess_integration_health,
+            credential_encryption_key_required,
+        )
+
+        engine = make_engine(get_database_url())
+        try:
+            with session_scope(engine) as session:
+                required = credential_encryption_key_required(session)
+                entries = assess_integration_health(session)
+                return required, entries
+        finally:
+            engine.dispose()
+    except Exception:  # noqa: BLE001 - health check must never crash
+        return None, None
+
+
 def check_credential_encryption() -> CheckOutcome:
+    """Phase 9.1: severity is driven by whether the database ACTUALLY
+    holds a stored encrypted credential that needs this key, AND whether
+    the currently-configured key actually decrypts it — never by syntax
+    validity alone, and never by whether a V2 feature flag happens to be
+    on. A key that's missing, invalid, OR simply WRONG (well-formed, but
+    not the key that encrypted the stored data) while real credentials
+    are stored is a genuine operational failure regardless of flags (the
+    Phase 9 audit's confirmed defect, plus the "wrong key" case a
+    presence-only check cannot catch)."""
     key = os.getenv("LEADLENS_CREDENTIAL_ENCRYPTION_KEY", "").strip()
-    v2_features_on = any(
-        os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
-        for name in ("LEADLENS_V2_AUTH_ENABLED", "LEADLENS_V2_TENANT_CONTEXT_ENABLED")
-    )
     if key:
         try:
             from cryptography.fernet import Fernet
 
             Fernet(key.encode())
-            return CheckOutcome("credential_encryption_key", HEALTHY, "present and well-formed")
         except Exception:  # noqa: BLE001
             return CheckOutcome("credential_encryption_key", UNHEALTHY, "present but not a valid Fernet key")
+
+    required, entries = _integration_health_snapshot()
+
+    if required is None:
+        return CheckOutcome(
+            "credential_encryption_key", DEGRADED,
+            "could not determine whether stored credentials require this key (database unreachable) — "
+            "treat as unresolved until the database check itself passes",
+        )
+
+    # Both categories are surfaced here, deliberately: Fernet's
+    # authenticated encryption cannot distinguish "wrong key" from
+    # "corrupted ciphertext" at the API level (both fail the same HMAC
+    # check and raise InvalidToken) — key_unavailable means the env var
+    # itself is missing/malformed, decryption_failed means a
+    # syntactically-valid key didn't decrypt the stored data, which is
+    # either the wrong key OR corrupted data. Either way, this
+    # environment's current key cannot currently produce working
+    # credentials for the affected row(s) — a real operational failure,
+    # not a "not required" configuration gap.
+    undecryptable = [e for e in entries if e.error_category in ("key_unavailable", "decryption_failed")]
+    if undecryptable:
+        who = ", ".join(f"{e.organization_slug}/{e.provider}" for e in undecryptable[:5])
+        return CheckOutcome(
+            "credential_encryption_key", UNHEALTHY,
+            f"the configured key cannot decrypt {len(undecryptable)} stored credential(s): {who}. "
+            "This is a real operational failure — the key is either missing, wrong (does not match "
+            "the key that encrypted this data), or the stored ciphertext itself is corrupted; Fernet's "
+            "authenticated encryption cannot distinguish the last two automatically.",
+        )
+
+    if required:
+        return CheckOutcome("credential_encryption_key", HEALTHY, "present, well-formed, and verified against stored credentials")
+    if key:
+        return CheckOutcome("credential_encryption_key", HEALTHY, "present and well-formed")
+
+    v2_features_on = any(
+        os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
+        for name in ("LEADLENS_V2_AUTH_ENABLED", "LEADLENS_V2_TENANT_CONTEXT_ENABLED")
+    )
     if v2_features_on:
         return CheckOutcome(
             "credential_encryption_key", DEGRADED,
             "not set — organization-scoped integration credentials cannot be configured",
         )
-    return CheckOutcome("credential_encryption_key", HEALTHY, "not required (V2 tenant features are off)")
+    return CheckOutcome(
+        "credential_encryption_key", HEALTHY,
+        "not required (no organization has a stored credential, and V2 tenant features are off)",
+    )
 
 
 def check_integration_configuration() -> CheckOutcome:
-    """Reports COUNTS/statuses only — never a secret value."""
+    """Phase 9.1: enumerates every ACTIVE organization's integrations —
+    not just the transitional default — so a broken credential belonging
+    to any non-default organization is no longer invisible here (the
+    Phase 9 audit's second confirmed defect). Reports counts/statuses
+    only — never a secret value; safe organization slugs and provider
+    names only for anything flagged unhealthy."""
     try:
-        import services.integration_manager_v21 as manager
+        from core.db.session import get_database_url, make_engine, session_scope
+        from services.integration_credentials import assess_integration_health
 
-        statuses = manager.integration_statuses()
-        configured = sum(1 for s in statuses if s.get("configured"))
+        engine = make_engine(get_database_url())
+        try:
+            with session_scope(engine) as session:
+                entries = assess_integration_health(session)
+        finally:
+            engine.dispose()
+
+        configured = [e for e in entries if e.status != "UNCONFIGURED"]
+        broken = [e for e in entries if e.decryptable is False]
+        if broken:
+            broken_desc = ", ".join(f"{e.organization_slug}/{e.provider}" for e in broken[:5])
+            more = f" (+{len(broken) - 5} more)" if len(broken) > 5 else ""
+            return CheckOutcome(
+                "integration_configuration", UNHEALTHY,
+                f"{len(broken)} configured integration(s) undecryptable: {broken_desc}{more}",
+            )
         return CheckOutcome(
             "integration_configuration", HEALTHY,
-            f"{configured}/{len(statuses)} provider(s) configured (dry-run mode is a valid, safe state)",
+            f"{len(configured)} configured integration(s) across {len({e.organization_id for e in entries})} "
+            "active organization(s) — all decryptable or not requiring decryption "
+            "(unconfigured optional providers are not a health issue)",
         )
     except Exception as exc:  # noqa: BLE001
         return CheckOutcome("integration_configuration", DEGRADED, f"{type(exc).__name__}: {exc}")

@@ -61,6 +61,55 @@ def _section_health() -> tuple[str, list[str]]:
     return level, lines
 
 
+def _section_integration_credentials() -> tuple[str, list[str]]:
+    """Phase 9.1: a dedicated section so a credential-specific finding
+    (a stored-but-undecryptable integration, for any organization, not
+    just the transitional default) is never buried inside the 10-line
+    general health section or masked by an unrelated failing check —
+    see docs/V2_PHASE9_PRODUCTION_HARDENING.md's Phase 9.1 addendum."""
+    try:
+        from sqlalchemy.orm import Session
+
+        from core.db.session import get_database_url, make_engine
+        from services.integration_credentials import (
+            assess_integration_health,
+            credential_encryption_key_required,
+        )
+
+        engine = make_engine(get_database_url())
+        try:
+            with Session(engine) as session:
+                required = credential_encryption_key_required(session)
+                entries = assess_integration_health(session)
+        finally:
+            engine.dispose()
+
+        lines: list[str] = [f"  master key required by stored data: {required}"]
+        levels: list[str] = []
+
+        configured = [e for e in entries if e.status != "UNCONFIGURED"]
+        broken = [e for e in entries if e.decryptable is False]
+        unconfigured = [e for e in entries if e.status == "UNCONFIGURED"]
+
+        lines.append(
+            f"  {len(configured)} configured, {len(unconfigured)} unconfigured (optional, not a health "
+            f"issue on its own), across {len({e.organization_id for e in entries})} active organization(s)"
+        )
+        if broken:
+            levels.append(FAIL)
+            for e in broken:
+                lines.append(
+                    f"  [FAIL] {e.organization_slug}/{e.provider} status={e.status} "
+                    f"undecryptable (error_category={e.error_category})"
+                )
+        else:
+            lines.append("  [PASS] no configured integration is undecryptable")
+
+        return _worst(levels or [PASS]), lines
+    except Exception as exc:  # noqa: BLE001
+        return FAIL, [f"  [FAIL] integration credential health check errored: {type(exc).__name__}: {exc}"]
+
+
 def _section_migration_drift() -> tuple[str, list[str]]:
     try:
         from alembic.config import Config
@@ -143,6 +192,7 @@ def _section_tenant_integrity() -> tuple[str, list[str]]:
 SECTIONS = (
     ("configuration", _section_config),
     ("health", _section_health),
+    ("integration_credentials", _section_integration_credentials),
     ("migration_drift", _section_migration_drift),
     ("tenant_integrity", _section_tenant_integrity),
 )

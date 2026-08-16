@@ -414,3 +414,141 @@ two deployment shapes:
 production deployment.** The IMPORTANT items above matter specifically
 for a genuine second-clinic production rollout, not for continued
 single-clinic operation.
+
+## Phase 9.1 addendum — multi-organization credential health + readiness hardening
+
+An independent audit of this phase (see the "Audit LeadLens CareOS V2
+Phase 9" request that followed) returned PARTIAL PASS, finding two real
+observability defects — both in the *checking* code, never in the
+credential-handling code itself (`resolve_credentials()` already failed
+closed correctly for every scenario tested):
+
+1. `check_credential_encryption()` decided whether the encryption key was
+   *required* from feature-flag intent (`LEADLENS_V2_AUTH_ENABLED` /
+   `LEADLENS_V2_TENANT_CONTEXT_ENABLED`) rather than actual stored
+   `OrganizationIntegration` state — a configured integration with a
+   missing/wrong key, with both flags off, could be reported HEALTHY.
+2. `check_integration_configuration()` (via
+   `integration_manager_v21.integration_statuses()`) only ever inspected
+   the transitional default organization — a broken credential belonging
+   to any other organization was invisible to `health_check.py` /
+   `production_readiness.py`.
+
+**Fix — one shared, real-decryption-attempt data layer.**
+`services/integration_credentials.py` gained:
+
+- `credential_encryption_key_required(session) -> bool` — a
+  data-driven existence check: True iff ANY `OrganizationIntegration`
+  row, in any organization, any status, has non-empty
+  `encrypted_credentials`. Never looks at a feature flag.
+- `assess_integration_health(session, *, include_inactive_organizations=False) -> list[IntegrationHealthEntry]`
+  — enumerates ACTIVE organizations (or all, when explicitly asked) ×
+  every `IntegrationProvider`, joined against actual integration rows in
+  two queries total (no N+1). For each `ACTIVE`-status row with stored
+  ciphertext, attempts a real, read-only decryption and classifies
+  `decryptable: True/False/None` plus `error_category`. A `DISABLED`
+  integration is reported as such and never attempted (intentionally
+  off is not "broken"). An `UNCONFIGURED` provider is reported
+  `decryptable=None` (optional, never counted as broken). Output is
+  structurally safe: organization id/slug, provider, status,
+  decryptable, error_category only — never a secret value.
+- `IntegrationHealthEntry` — the frozen dataclass both fields above and
+  every caller use.
+
+Both `scripts/health_check.py::check_credential_encryption()` and
+`check_integration_configuration()`, plus a new
+`scripts/production_readiness.py::_section_integration_credentials()`
+section, now derive their verdict entirely from this same real,
+per-organization decryption-attempt data — so the two checks can never
+disagree with each other, and a broken credential belonging to any
+organization (not just the default) is surfaced by name (safe slug),
+with the finding's own section never masked by an unrelated
+`production_readiness.py` section failing.
+
+**A third defect was found and fixed during this phase's own
+adversarial self-testing, before the report above was even written**:
+the first draft of `check_credential_encryption()` treated "a
+syntactically well-formed key is present" as sufficient for HEALTHY —
+so a syntactically-valid but *wrong* key (not the one that actually
+encrypted the stored data) was reported HEALTHY. Fernet's authenticated
+encryption cannot distinguish "wrong key" from "corrupted ciphertext" at
+the API level (both raise the same `InvalidToken`/
+`CredentialDecryptionError`), so both are now classified together as
+`error_category in ("key_unavailable", "decryption_failed")` and both
+fail the check — a real operational failure regardless of which of the
+two it actually is.
+
+**Verified, via `tests/test_phase9_1_credential_health.py` (13 tests)
+plus a standalone A–F adversarial scenario battery run directly against
+`scripts/production_readiness.py`** (no credentials at all → PASS/not
+required; healthy credential + correct key → PASS; non-default-org
+credential + missing key → FAIL, correctly named; corrupted ciphertext
+→ FAIL; one healthy org + one broken non-default org → only the broken
+one surfaced as FAIL; multiple healthy orgs → PASS; unconfigured
+optional providers alone → PASS, never a false failure). No false PASS
+occurred for any broken scenario; no false FAIL occurred for any healthy
+or merely-unconfigured scenario.
+
+**Not touched, not needed**: no schema/migration change (confirmed via
+a clean `alembic upgrade head` against a throwaway database), no change
+to `resolve_credentials()`'s fail-closed behavior or Phase 6 tenant
+credential isolation, no new flags, no UI change, no billing/OAuth/CRM/
+Jarvis/scheduler-redesign work — none of that was in scope and none was
+started, per this phase's explicit instruction.
+
+**A known engine-lifecycle testing pitfall, encountered again in this
+phase's own test suite, worth remembering for future test authors**: a
+test that monkeypatches `core.db.session.make_engine` to always return
+one shared, already-open Engine object breaks the moment any exercised
+code path calls `.dispose()` on it — the first `.dispose()` corrupts the
+engine for every later call in the same test (catastrophic for SQLite
+`:memory:`, whose default connection pool holds the database's only
+connection). First fixed this way in Phase 8.1's
+`run_all_checks()`; this phase's own new test file initially hit the
+identical failure mode and was fixed the same way other Phase 9 tests
+already do it — pointing `get_database_url()` at a real temp-file SQLite
+database instead, so each internal `make_engine()`/`.dispose()` pair
+constructs and safely tears down its own independent Engine object
+against the same underlying file.
+
+## Phase 9.1.1 addendum — ERROR-state credential health classification
+
+An independent audit of Phase 9.1 found one confirmed defect:
+`assess_integration_health()` only decrypt-attempted rows with
+`status == ACTIVE`. But `resolve_credentials()` (the real adapter read
+path) transitions a row to `status == ERROR` the moment a *live*
+decryption failure occurs — after that transition the row fell out of
+the health check's classify branch entirely (`decryptable=None`,
+`error_category=None`), identical to an intentionally `DISABLED`
+integration. `check_credential_encryption()`,
+`check_integration_configuration()`, and
+`production_readiness.py`'s `integration_credentials` section could all
+report HEALTHY/PASS for a credential already known broken by a real
+failed send.
+
+**Fix (`services/integration_credentials.py::assess_integration_health()`)**:
+widened the decrypt-attempt condition from `status == ACTIVE` to
+`status in (ACTIVE, ERROR)`. Traced first: `resolve_credentials()` is
+the *only* place in this codebase that ever sets `IntegrationStatus.ERROR`,
+and it does so only immediately after a real decryption failure —
+`last_error_code` is always `"key_unavailable"` or `"decryption_failed"`.
+This module makes no live provider API calls, so there is no
+"ERROR from connectivity" case to conflate with a credential problem —
+re-attempting decryption (rather than trusting the persisted
+`last_error_code`) keeps ACTIVE and ERROR rows classified through the
+exact same single code path. Still fully read-only: no
+`session.flush()`/`commit()`, never rewrites status/ciphertext/
+last_error fields, never silently re-activates a row — an ERROR row
+whose key has since been fixed correctly reports `decryptable=True`
+while its administrative `status` stays `"ERROR"` until an operator
+explicitly reconfigures it (status and decryptability are reported as
+two independent fields, on purpose).
+
+Verified via `tests/test_phase9_1_1_hardening.py` (14 tests, including
+the exact audit regression sequence — configure, rotate to a wrong key,
+trigger one real `resolve_credentials()` call exactly as a live send
+would, confirm the row is genuinely `ERROR`, then confirm all three
+surfaces report the problem) and confirmed the regression test fails
+against the pre-fix condition and passes against the fix (both states
+verified directly, not merely asserted). No schema change, no new
+flags, no regression across the full suite (442 tests, up from 428).

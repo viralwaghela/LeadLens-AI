@@ -388,7 +388,41 @@ single PASS/WARN/FAIL aggregator command), `scripts/backup_database.py`
 `core.memory.backup_now()` rather than reimplementing it), and
 extensions to `scripts/verify_multi_org_readiness.py` (membership
 orphan check, shadow-sync health, an updated marketing-site readiness
-finding). See `docs/V2_PHASE9_PRODUCTION_HARDENING.md` for the full
+finding). **Phase 9.1** (a focused hardening pass fixing two
+observability defects an independent audit of Phase 9 found, no new
+flags/migrations) made `scripts/health_check.py` and
+`scripts/production_readiness.py`'s credential/integration checks
+genuinely multi-organization- and real-decryption-aware instead of
+flag-driven or default-org-only: `services/integration_credentials.py`
+gained `credential_encryption_key_required()` (data-driven — true iff
+any stored `OrganizationIntegration` row anywhere has encrypted
+credentials, never based on `LEADLENS_V2_AUTH_ENABLED`/
+`LEADLENS_V2_TENANT_CONTEXT_ENABLED`) and `assess_integration_health()`
+(enumerates every ACTIVE organization × provider and attempts a real,
+read-only decryption per configured row, classifying
+decryptable/error_category — never a secret value); both
+`check_credential_encryption()` and `check_integration_configuration()`
+now derive their verdict from this same data, and
+`production_readiness.py` gained a dedicated `integration_credentials`
+section so a broken non-default-organization credential is never
+invisible or buried under an unrelated failing section. A third defect
+— a syntactically-valid but *wrong* encryption key being reported
+HEALTHY — was found and fixed during this phase's own adversarial
+self-testing, before any report was written. See
+`docs/V2_PHASE9_PRODUCTION_HARDENING.md`'s Phase 9.1 addendum for the
+full defect writeup, design, and the A–F adversarial scenario battery
+results. **Phase 9.1.1** (a focused hardening pass fixing one defect an
+independent audit of Phase 9.1 found, no new flags/migrations) closed
+it: `assess_integration_health()` only decrypt-attempted `ACTIVE`-status
+rows, so a credential already known broken by a real, live
+`resolve_credentials()` failure (which transitions the row to
+`ERROR`) fell out of classification entirely and was reported
+HEALTHY/PASS — fixed by decrypt-attempting `ERROR`-status rows the same
+way, since `resolve_credentials()` is the only place that ever sets
+`ERROR`, and always after a genuine decryption failure. Still fully
+read-only (never rewrites status/ciphertext/last_error). See
+`docs/V2_PHASE9_PRODUCTION_HARDENING.md`'s Phase 9.1.1 addendum. See
+`docs/V2_PHASE9_PRODUCTION_HARDENING.md` for the full
 production-risk map, feature-flag classification, legacy `memory_store`
 dependency map, and honest known-limitations list;
 `docs/PRODUCTION_RUNBOOK.md` for the deployment/rollback procedures; and
@@ -465,7 +499,11 @@ treat that as license to keep expanding either surface without a
 similarly explicit ask: do not redesign the marketing-site public API
 further, and do not thread organization context into
 `services/appointment_messaging.py`'s auto-send credential resolution
-(the one remaining documented gap) without discussing it first.
+(the one remaining documented gap) without discussing it first. Phase
+9.1 was scoped to health/readiness *observability* only — do not treat
+`assess_integration_health()` as license to start building an admin UI,
+alerting/paging integration, or automated remediation on top of it
+without a similarly explicit ask.
 
 ## Automation roadmap
 
