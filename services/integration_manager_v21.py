@@ -175,6 +175,7 @@ def prepare_execution(
     rows.append(item)
     _save(rows)
     audit_event("local-owner", "prepare_execution", provider, item_id)
+    _shadow_sync_approval_and_item(approval, item)
     return copy.deepcopy(item)
 
 
@@ -183,6 +184,27 @@ def _approval_status(approval_id: str) -> str:
         if row.get("id") == approval_id:
             return str(row.get("data", {}).get("status", "Pending"))
     return "Missing"
+
+
+def _get_approval_row(approval_id: str) -> dict[str, Any] | None:
+    for row in load_memory().get("approvals", []):
+        if row.get("id") == approval_id:
+            return row
+    return None
+
+
+def _shadow_sync_approval_and_item(approval: dict[str, Any] | None, item: dict[str, Any]) -> None:
+    """Phase 5: best-effort tenant-scoped relational shadow copy, called
+    only after the legacy write above has already succeeded. Never
+    raises — see services/tenant_operational_sync.py."""
+    try:
+        from services.tenant_operational_sync import sync_approval, sync_execution_queue_item
+
+        if approval is not None:
+            sync_approval(approval)
+        sync_execution_queue_item(item)
+    except Exception:  # noqa: BLE001 - must never break a live approval/execution operation
+        pass
 
 
 def decide_item(item_id: str, decision: str) -> dict[str, Any]:
@@ -216,6 +238,7 @@ def decide_item(item_id: str, decision: str) -> dict[str, Any]:
         item.get("provider", ""),
         item_id,
     )
+    _shadow_sync_approval_and_item(_get_approval_row(item.get("approval_id", "")), item)
     return copy.deepcopy(item)
 
 
@@ -297,6 +320,7 @@ def execute_item(item_id: str) -> dict[str, Any]:
         provider,
         f"{item_id}:{item['status']}",
     )
+    _shadow_sync_approval_and_item(_get_approval_row(item.get("approval_id", "")), item)
     return copy.deepcopy(result_dict)
 
 

@@ -114,6 +114,11 @@ def _mark_flagged(check_name: str, item_key: str, note: str = "") -> None:
         "item_key": item_key,
         "note": note,
     })
+    try:
+        from services.tenant_operational_sync import sync_scheduler_alert_ledger_entry
+        sync_scheduler_alert_ledger_entry(check_name, item_key, note)
+    except Exception:  # noqa: BLE001 - Phase 5 shadow sync must never break the scheduler
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1314,7 +1319,41 @@ def therapist_schedule_optimizer() -> CheckResult:
 # ---------------------------------------------------------------------------
 
 
+def resolve_scheduler_organizations() -> list[int]:
+    """Phase 5: the set of organizations this scheduler run should
+    execute for. Today this is always exactly one element — the same
+    transitional single-clinic organization every other Phase 2-4
+    component resolves — because that's genuinely all that exists in
+    any live deployment right now. Kept as its own function (rather
+    than inlining the resolution) so a future phase that actually
+    enumerates multiple active organizations only needs to change this
+    one function; run_all_checks()'s 14 zero-argument check functions
+    do not need to change at all, since a single-element loop over them
+    is behaviorally identical to not looping. Returns an empty list
+    (fails closed, runs nothing) rather than guessing if resolution
+    itself fails — see docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md."""
+    try:
+        from core.db.session import make_engine, session_scope
+        from core.identity.tenant_context import ActorType, build_transitional_context
+
+        engine = make_engine()
+        with session_scope(engine) as session:
+            context = build_transitional_context(session, actor_type=ActorType.SCHEDULER)
+            return [context.organization_id]
+    except Exception:  # noqa: BLE001 - resolution failure must not crash the whole scheduler run
+        logger.error("scheduler_org_scope_failure: could not resolve any organization for this run.", exc_info=True)
+        return []
+
+
 def run_all_checks() -> dict[str, CheckResult]:
+    # Phase 5: resolve which organization(s) this run covers, and build
+    # (but do not yet thread through — see docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md
+    # for why the 14 check functions below remain unchanged) a system
+    # TenantContext for observability/future use. Resolved once per run,
+    # not once per check — no hidden N+1 organization lookups.
+    organizations = resolve_scheduler_organizations()
+    if not organizations:
+        logger.warning("No organization resolved for this scheduler run — running checks against legacy store only.")
     results: dict[str, CheckResult] = {}
     for func in CHECKS:
         name = func.__name__

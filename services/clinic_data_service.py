@@ -87,11 +87,24 @@ def _memory_key(entity: str) -> str:
     return ENTITY_META[entity][0]
 
 
-def _read_rows(entity: str) -> list[dict[str, Any]]:
+def _read_rows_legacy(entity: str) -> list[dict[str, Any]]:
     value = load_memory().get(_memory_key(entity), [])
     if not isinstance(value, list):
         raise RuntimeError(f"{_memory_key(entity)} must contain a list.")
     return [row for row in value if isinstance(row, dict)]
+
+
+def _read_rows(entity: str) -> list[dict[str, Any]]:
+    """Phase 4's single read-routing hook. list_records(), get_record(),
+    search_records(), records_with_patient_names(), patient_profile(),
+    patient_risk_summary(), and clinic_metrics() are all built on top
+    of this function (directly or transitively) — routing here alone
+    covers every reader (UI, Jarvis, scheduler, reports) without
+    touching any of them. See services/crm_read_router.py and
+    docs/V2_PHASE4_READ_CUTOVER.md."""
+    from services.crm_read_router import read_rows
+
+    return read_rows(entity, legacy_reader=lambda: _read_rows_legacy(entity))
 
 
 def list_records(

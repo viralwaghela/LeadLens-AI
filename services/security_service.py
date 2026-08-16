@@ -7,6 +7,11 @@ def mask_sensitive(value,visible=2):
 
 def audit_event(actor,action,entity,detail=""):
     add_memory_entry("security_audit_log", {"actor":actor,"action":action,"entity":entity,"detail":detail})
+    try:
+        from services.tenant_operational_sync import sync_audit_event
+        sync_audit_event(actor, action, entity, detail)
+    except Exception:  # noqa: BLE001 - Phase 5 shadow sync must never break a legacy audit write
+        pass
 
 def audit_rows():
     return [

@@ -2,19 +2,25 @@ name: CI
 
 # The V2 audit found that the existing test suite (pytest-collectible AND
 # script-style regression tests, see tests/) was never run automatically
-# anywhere. This closes that gap, and adds Phase 0's, Phase 1's, Phase
-# 2's, and Phase 3's own checks. None of Phase 1 (core/identity/), Phase
-# 2 (services/jarvis_memory.py's DB-backed storage), or Phase 3 (CRM
-# relational dual-write) need an extra CI step beyond the existing
-# `pytest tests/ -v` — tests/test_phase1_identity.py,
-# tests/test_phase2_jarvis_memory.py, and
-# tests/test_phase3_crm_dual_write.py are all pytest-collectible like
-# tests/test_phase0_schema.py, and all exercise backfill/repair/parity
-# logic through injected test fixtures/engines only — never a real
-# DATABASE_URL, never scripts/*.py invoked directly against any real
-# database. Argon2id password hashing (Phase 1) is fully local, and
-# Phase 2/3's DB/JSON storage is fully local too — no external service,
-# no secret, needed for any of it.
+# anywhere. This closes that gap, and adds Phase 0's through Phase 5's
+# own checks. None of Phase 1 (core/identity/), Phase 2
+# (services/jarvis_memory.py's DB-backed storage), Phase 3 (CRM
+# relational dual-write), Phase 4 (CRM relational read cutover), or
+# Phase 5 (tenant-scoped operational shadow-sync) need an extra CI step
+# beyond the existing `pytest tests/ -v` — tests/test_phase1_identity.py,
+# tests/test_phase2_jarvis_memory.py, tests/test_phase3_crm_dual_write.py,
+# tests/test_phase4_crm_read_cutover.py, and
+# tests/test_phase5_tenant_context.py are all pytest-collectible like
+# tests/test_phase0_schema.py, and all exercise
+# backfill/repair/parity/read-routing/tenant-resolution logic through
+# injected test fixtures/engines only — never a real DATABASE_URL, never
+# scripts/*.py invoked directly against any real database, and CI never
+# sets any LEADLENS_V2_READ_*, LEADLENS_V2_DUAL_WRITE_ENABLED, or
+# LEADLENS_V2_TENANT_CONTEXT_ENABLED cutover flag, so CI can never
+# accidentally activate production cutover behavior. Argon2id password
+# hashing (Phase 1) is fully local, and Phase 2/3/4/5's DB/JSON storage
+# is fully local too — no external service, no secret, needed for any of
+# it.
 #
 # Deliberately does NOT reference any real secret (DATABASE_URL,
 # OPENAI_API_KEY, WHATSAPP_*, GMAIL_*, GOOGLE_*) anywhere in this file —
@@ -62,7 +68,7 @@ jobs:
           done
           echo "Clean environment confirmed — no real credentials present."
 
-      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3)
+      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5)
         run: python -m pytest tests/ -v
 
       - name: Run script-style regression tests
@@ -105,7 +111,7 @@ jobs:
           echo "reproducing it against a clean pre-Phase-0 tree). Not fixed here per scope"
           echo "discipline. See docs/V2_COEXISTENCE.md."
 
-      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1 + Phase 2 + Phase 3)
+      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5)
         run: |
           export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
           python -m alembic upgrade head

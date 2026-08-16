@@ -64,16 +64,23 @@ feature in its own right.
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
    it first, since it's a significant architectural decision. **V2 Phase
-   0, 1, 2, and 3 have been built** (a relational schema, an identity/
+   0 through 5 have been built** (a relational schema, an identity/
    authorization backend on top of it, Jarvis's learning-memory storage
-   now genuinely running through this schema, and — Phase 3 — CRM writes
-   now also shadow-write into the relational schema behind a kill switch
-   that currently defaults OFF — see "V2 migration" below) but CRM
-   *reads*, Jarvis, the scheduler, approvals, integrations, and
-   `core/auth.py`'s shared-password login are all still exclusively
-   legacy; none of these phases change the multi-tenant gap itself, they
-   only lay groundwork for the phase that eventually will (a real live
-   tenant-routing cutover, not yet built).
+   now genuinely running through this schema, CRM writes shadow-writing
+   into the relational schema, CRM *reads* that can be routed to the
+   relational schema too, entity-by-entity, behind flags that all
+   currently default OFF, and — Phase 5 — a `TenantContext` abstraction
+   plus tenant-scoped shadow copies of approvals, the execution queue,
+   audit events, and the scheduler ledger, all behind
+   `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**) — see "V2
+   migration" below) but Jarvis, the scheduler, approvals, integrations,
+   and `core/auth.py`'s shared-password login are all still exclusively
+   legacy and single-tenant in live operation, and CRM reads remain
+   legacy in every live deployment until an operator explicitly opts an
+   entity in; none of these phases change the multi-tenant gap itself —
+   there is still no live tenant-routing cutover, no organization
+   switcher, and no live RBAC enforcement — they only lay groundwork for
+   the phase that eventually will.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -101,7 +108,7 @@ feature in its own right.
   `services/learning_memory_v22.py` and
   `services/agent_collaboration_v23.py`).
 
-## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`)
+## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`, `services/crm_read_router.py`, `services/tenant_operational_sync.py`)
 
 LeadLens V2 is an incremental brownfield migration, not a rewrite.
 **The legacy `core/memory.py` path remains the production source of
@@ -116,27 +123,55 @@ learning-memory module — the first genuinely live consumer of this
 schema** (reads/writes `core/db/models/jarvis.py`'s
 `JarvisLearningRecord` table as its primary durable store, with the
 legacy `data/learning/learning_memory.json` file kept permanently in
-sync), and **Phase 3 made `services/clinic_data_service.py` — every CRM
+sync), **Phase 3 made `services/clinic_data_service.py` — every CRM
 mutation — shadow-write into the Phase 0 relational CRM tables**
 (`core/db/models/clinic.py`) via `services/relational_sync_service.py`,
-behind `LEADLENS_V2_DUAL_WRITE_ENABLED` (**defaults OFF**). The legacy
-`memory_store` write is always authoritative; a relational shadow-write
-failure is caught, classified, and recorded
-(`core/db/models/shadow_sync.py`'s `ShadowSyncFailure`) rather than
-ever rolling back or blocking the legacy CRM operation — see
-`docs/V2_PHASE3_CRM_DUAL_WRITE.md`. **CRM reads are still 100% legacy**
-— Phase 3 is write-only, by design. Every other live file — `app.py`,
-`dashboard.py`, `core/auth.py`, the scheduler, the approval/execution
-engine, the integrations — is still completely untouched. **Do not wire
-multi-tenant routing, CRM reads, or authentication into a live path
-without that being its own explicit, discussed phase** — see
-`docs/V2_COEXISTENCE.md` for Phase 0's architecture,
-`docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the full role →
-permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's, and
+behind `LEADLENS_V2_DUAL_WRITE_ENABLED` (**defaults OFF**), and **Phase
+4 lets CRM reads route to the relational tables too, entity-by-entity**
+via `services/crm_read_router.py`, behind 9 independent
+`LEADLENS_V2_READ_<ENTITY>` flags (**all default OFF**) plus a
+`LEADLENS_V2_READ_COMPARE` shadow-compare mode for pre-cutover
+verification. The legacy `memory_store` write is always authoritative
+(Phase 3 unchanged by Phase 4); a relational shadow-write failure is
+caught, classified, and recorded (`core/db/models/shadow_sync.py`'s
+`ShadowSyncFailure`) rather than ever rolling back or blocking the
+legacy CRM operation, and a relational read mismatch/failure is
+recorded the same way (`ReadMismatch`) — see
+`docs/V2_PHASE3_CRM_DUAL_WRITE.md` and `docs/V2_PHASE4_READ_CUTOVER.md`.
+**Phase 5 added `core/identity/tenant_context.py`** (an immutable
+`TenantContext` — organization id plus actor identity, with USER/
+SYSTEM/SCHEDULER/AUTOMATION actor types, deliberately no module-level
+mutable global "current organization" state) **and
+`services/tenant_operational_sync.py`**, which best-effort shadow-syncs
+approvals, execution-queue items, security-audit events, and the
+scheduler alert ledger into Phase 0's existing organization-scoped
+relational operational tables, behind `LEADLENS_V2_TENANT_CONTEXT_ENABLED`
+(**defaults OFF**) — hooked from `services/integration_manager_v21.py`,
+`services/security_service.py`, and `scheduler/run_scheduled_checks.py`
+the same shadow-sync-never-blocks-the-legacy-write way Phase 3 hooked
+CRM mutations. Failure to resolve an organization for a tenant-owned
+operation fails closed (no row written) — it never falls back to "the
+first organization" or a global row. Jarvis, specialist orchestration,
+and Jarvis memory were audited and found to already resolve exactly one
+organization end-to-end via the existing Phase 2/4 mechanisms, so they
+needed no code changes. See `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md`
+for the full tenant-flow audit, the Jarvis call-graph proof, and the
+adversarial two-organization test suite
+(`tests/test_phase5_tenant_context.py`). Every other live file —
+`app.py`, `dashboard.py`, `core/auth.py`, the scheduler's check
+functions themselves, the approval/execution engine's actual logic, the
+integrations — is still completely untouched. **Do not wire multi-tenant
+organization switching or authentication into a live path without that
+being its own explicit, discussed phase** — see `docs/V2_COEXISTENCE.md`
+for Phase 0's architecture, `docs/V2_PHASE1_IDENTITY.md` for Phase 1's
+(including the full role → permission matrix),
+`docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's,
 `docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including the full
-CRM mutation-surface audit, the known `marketing-site/api/lead.py`
-bypass, and the recommended production deployment sequence). Every
-phase's rollback is the same shape — an env-var kill switch, no
+CRM mutation-surface audit and the known `marketing-site/api/lead.py`
+bypass), `docs/V2_PHASE4_READ_CUTOVER.md` for Phase 4's (including the
+full CRM read-path audit and the entity-by-entity production activation
+runbook), and `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's.
+Every phase's rollback is the same shape — an env-var kill switch, no
 destructive DB changes needed.
 
 **Do not rebuild these without a real reason** (verified working,
@@ -147,9 +182,16 @@ qualification logic in `scheduler/run_scheduled_checks.py`, the
 integration adapters' actual API-calling code in `integrations/*.py`,
 the current Streamlit UI, the Docker foundation. Phase 1 adds: do not
 wire `core/identity/` into `core/auth.py` or any UI login form without
-that being its own explicit, discussed phase. Phase 3 adds: do not wire
-`relational_sync_service` into any CRM **read** path without that being
-its own explicit, discussed phase.
+that being its own explicit, discussed phase. Phase 4 adds: do not
+enable any `LEADLENS_V2_READ_<ENTITY>` flag in code (they must only be
+set via deployment environment/secrets, per
+`docs/V2_PHASE4_READ_CUTOVER.md`'s runbook), and do not turn off Phase
+3's legacy-authoritative write path — Phase 4 changes only which store
+answers a *read*. Phase 5 adds: do not enable
+`LEADLENS_V2_TENANT_CONTEXT_ENABLED` in code (deployment
+environment/secrets only), do not build a live organization switcher or
+enforce new RBAC broadly in the UI, and do not implement per-clinic
+integration credentials — that is Phase 6's, deliberately not started.
 
 ## Automation roadmap
 
