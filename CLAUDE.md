@@ -357,18 +357,47 @@ organization exists in the target database) and reconfirmed — see
 endpoint remains genuinely unsupported for shared multi-org public lead
 ingestion; not redesigned. One known remaining gap, explicitly
 documented rather than silently fixed: `appointment_reminder()`'s 24hr
-auto-send branch still resolves its WhatsApp send implicitly, not
-per-organization. See that doc for the full Phase 8 design, the
-second-clinic validation procedure, `tests/test_phase8_saas_onboarding.py`
-(24 tests, including one end-to-end two-organization scenario with
-deliberately overlapping external ids), and
-`tests/test_phase8_1_hardening.py` (17 tests, including an A→B→A
-scheduler-interleaving test and the exact cross-tenant audit scenario
-the Phase 8 audit reproduced). Every other live file — the approval/
-execution engine's actual decision logic, the adapters' API-calling
-logic, the scheduler check functions' own qualification/business logic
-(only their organization threading changed, per Phase 8.1 above) — is
-still completely untouched. See `docs/V2_COEXISTENCE.md` for Phase 0's
+auto-send branch resolved its WhatsApp send implicitly, not
+per-organization (closed in Phase 9 — see below). See that doc for the
+full Phase 8 design, the second-clinic validation procedure,
+`tests/test_phase8_saas_onboarding.py` (24 tests, including one
+end-to-end two-organization scenario with deliberately overlapping
+external ids), and `tests/test_phase8_1_hardening.py` (17 tests,
+including an A→B→A scheduler-interleaving test and the exact cross-
+tenant audit scenario the Phase 8 audit reproduced). **Phase 9 —
+production hardening** (the final foundational migration phase; no
+product redesign) closed the two remaining documented tenant-isolation
+gaps and added the operational tooling a real production deployment
+needs: `services/appointment_messaging.py`'s
+`send_appointment_confirmation()`/`send_appointment_rsvp_reminder()` now
+accept an optional `context: TenantContext | None`, threaded through
+from `scheduler/run_scheduled_checks.py::appointment_reminder()`'s own
+context, so the 24hr auto-send's patient lookup, clinic-name resolution,
+and WhatsApp credential resolution are all organization-scoped;
+`marketing-site/api/lead.py` now resolves exactly one trusted
+organization via `LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG` (or the
+sole organization when only one exists) before every write, refusing
+ambiguous multi-org writes, and best-effort shadow-writes into the
+relational `leads` table. New: `core/config_validation.py` (centralized,
+secret-free startup config validation), `core/observability.py`
+(structured logging conventions — error categories, run ids, a
+secret-redacting `log_event()`), `scripts/health_check.py`
+(HEALTHY/DEGRADED/UNHEALTHY), `scripts/production_readiness.py` (the
+single PASS/WARN/FAIL aggregator command), `scripts/backup_database.py`
++ `scripts/restore_validate.py` (backup/restore, reusing
+`core.memory.backup_now()` rather than reimplementing it), and
+extensions to `scripts/verify_multi_org_readiness.py` (membership
+orphan check, shadow-sync health, an updated marketing-site readiness
+finding). See `docs/V2_PHASE9_PRODUCTION_HARDENING.md` for the full
+production-risk map, feature-flag classification, legacy `memory_store`
+dependency map, and honest known-limitations list;
+`docs/PRODUCTION_RUNBOOK.md` for the deployment/rollback procedures; and
+`docs/BACKUP_RESTORE.md` for backup/restore specifically. Every other
+live file — the approval/execution engine's actual decision logic, the
+adapters' API-calling logic, the scheduler check functions' own
+qualification/business logic (only their organization threading
+changed, across Phase 8.1 and Phase 9) — is still completely untouched.
+See `docs/V2_COEXISTENCE.md` for Phase 0's
 architecture, `docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the
 full role → permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for
 Phase 2's, `docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including

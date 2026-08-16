@@ -40,11 +40,12 @@ from core.db.models.clinic import (  # noqa: E402
     ProgressNote,
     Therapist,
 )
-from core.db.models.identity import Membership, MembershipStatus  # noqa: E402
+from core.db.models.identity import Membership, MembershipStatus, User  # noqa: E402
 from core.db.models.integration import OrganizationIntegration  # noqa: E402
 from core.db.models.jarvis import JarvisLearningRecord  # noqa: E402
 from core.db.models.operations import Approval, ExecutionQueueItem, SecurityAuditEvent  # noqa: E402
 from core.db.models.organization import Organization, OrganizationSettings  # noqa: E402
+from core.db.models.shadow_sync import ReadMismatch, ShadowSyncFailure  # noqa: E402
 from core.db.session import get_database_url, make_engine, session_scope  # noqa: E402
 
 _CRM_MODELS = {
@@ -125,17 +126,55 @@ def cross_org_fk_check(session) -> list[str]:
     return problems
 
 
+def membership_orphan_check(session) -> list[str]:
+    """Phase 9 §12: memberships must always resolve to a real user and a
+    real organization — the FK constraints already make this impossible
+    in a healthy database, so this is defense-in-depth, same spirit as
+    cross_org_fk_check(). Reports counts/ids only, never patient data."""
+    problems: list[str] = []
+    for membership in session.query(Membership).all():
+        if session.get(User, membership.user_id) is None:
+            problems.append(f"membership {membership.id} references missing user_id={membership.user_id}")
+        if session.get(Organization, membership.organization_id) is None:
+            problems.append(f"membership {membership.id} references missing organization_id={membership.organization_id}")
+    return problems
+
+
+def shadow_sync_health(session) -> dict:
+    """Phase 9 §12: unresolved Phase 3/4 shadow-write/read-mismatch
+    counts — an operator-facing signal of CRM legacy/relational parity
+    health while dual-write/read-cutover flags are in use. Counts only;
+    see scripts/repair_v2_crm.py and scripts/verify_v2_crm_parity.py for
+    the full per-record remediation tooling this summarizes."""
+    unresolved_write_failures = (
+        session.query(func.count(ShadowSyncFailure.id))
+        .filter(ShadowSyncFailure.resolved.is_(False))
+        .scalar()
+        or 0
+    )
+    total_write_failures = session.query(func.count(ShadowSyncFailure.id)).scalar() or 0
+    read_mismatches = session.query(func.count(ReadMismatch.id)).scalar() or 0
+    return {
+        "unresolved_shadow_write_failures": unresolved_write_failures,
+        "total_shadow_write_failures": total_write_failures,
+        "read_mismatches_recorded": read_mismatches,
+    }
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
 
 
-def multi_org_readiness_gate(organizations_count: int) -> list[tuple[str, str]]:
-    """Phase 8.1: an explicit, honest readiness gate — no false PASS.
-    Returns a list of (level, message) where level is "OK", "WARN", or
-    "FAIL". A FAIL means this deployment cannot safely be used as a
-    shared multi-org production database as it stands; a WARN flags a
-    real limitation that is safe only because there is currently just
-    one organization."""
+def multi_org_readiness_gate(
+    organizations_count: int, *, unresolved_shadow_write_failures: int = 0,
+) -> list[tuple[str, str]]:
+    """Phase 8.1 (extended Phase 9 §12): an explicit, honest readiness
+    gate — no false PASS. Returns a list of (level, message) where level
+    is "OK", "WARN", or "FAIL". A FAIL means this deployment cannot
+    safely be used as a shared multi-org production database as it
+    stands; a WARN flags a real limitation that is safe only because
+    there is currently just one organization, or a known-unresolved
+    operational issue worth an operator's attention."""
     findings: list[tuple[str, str]] = []
 
     audit_scoped = _env_flag("LEADLENS_V2_AUDIT_TENANT_AUTHORITATIVE_ENABLED")
@@ -186,21 +225,36 @@ def multi_org_readiness_gate(organizations_count: int) -> list[tuple[str, str]]:
         findings.append(("OK", "Scheduler checks accept an explicit organization context."))
 
     if organizations_count > 1:
-        findings.append((
-            "WARN",
-            "marketing-site/api/lead.py has NO organization concept — it writes "
-            "directly into the single legacy memory_store row via raw SQL. With more "
-            "than one organization in this database, it now refuses to write at all "
-            "(a Phase 8.1 safety guard — see AmbiguousMultiOrgDatabaseError), which is "
-            "safe but means public lead capture is UNSUPPORTED for any organization "
-            "sharing this database until that endpoint becomes organization-aware.",
-        ))
+        marketing_slug_configured = bool(os.environ.get("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", "").strip())
+        if marketing_slug_configured:
+            findings.append((
+                "OK",
+                "marketing-site/api/lead.py has LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG "
+                "configured (Phase 9) — it resolves the exact organization this Vercel "
+                "deployment's leads belong to and refuses to guess otherwise. Verify the "
+                "configured slug matches the intended organization for THIS deployment.",
+            ))
+        else:
+            findings.append((
+                "FAIL",
+                "marketing-site/api/lead.py has NO LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG "
+                "configured and more than one organization exists — it refuses to write at "
+                "all (Phase 8.1/9 safety guard — see AmbiguousMultiOrgDatabaseError) rather "
+                "than guess which clinic a public lead belongs to. Public lead capture is "
+                "UNSUPPORTED for this deployment until the slug is configured.",
+            ))
     else:
         findings.append((
             "OK",
-            "Only one organization present — marketing-site/api/lead.py's "
-            "single-clinic write path remains valid, but is still not "
-            "organization-aware; do not point it at a shared multi-org database.",
+            "Only one organization present — marketing-site/api/lead.py resolves it "
+            "unambiguously without any extra configuration.",
+        ))
+
+    if unresolved_shadow_write_failures > 0:
+        findings.append((
+            "WARN",
+            f"{unresolved_shadow_write_failures} unresolved CRM shadow-write failure(s) — "
+            "see scripts/repair_v2_crm.py to investigate/remediate.",
         ))
 
     return findings
@@ -246,8 +300,26 @@ def main() -> int:
             else:
                 print("Cross-org FK check: PASSED (no child row references a parent in a different organization).")
 
+            orphan_problems = membership_orphan_check(session)
+            if orphan_problems:
+                print(f"MEMBERSHIP ORPHAN CHECK: FAILED ({len(orphan_problems)} problem(s)):")
+                for problem in orphan_problems:
+                    print(f"  - {problem}")
+            else:
+                print("Membership orphan check: PASSED (every membership resolves to a real user and organization).")
+
+            sync_health = shadow_sync_health(session)
+            print(
+                f"Shadow-sync health: {sync_health['unresolved_shadow_write_failures']} unresolved write "
+                f"failure(s) ({sync_health['total_shadow_write_failures']} total ever recorded), "
+                f"{sync_health['read_mismatches_recorded']} read mismatch(es) recorded."
+            )
+
             print("\n--- Multi-org production readiness gate ---")
-            findings = multi_org_readiness_gate(len(organizations))
+            findings = multi_org_readiness_gate(
+                len(organizations),
+                unresolved_shadow_write_failures=sync_health["unresolved_shadow_write_failures"],
+            )
             has_fail = False
             for level, message in findings:
                 print(f"  [{level}] {message}")

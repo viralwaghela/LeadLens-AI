@@ -396,11 +396,11 @@ def test_scheduler_single_org_legacy_mode_unaffected(isolated, monkeypatch) -> N
 # 3. MARKETING SITE GUARD
 # ---------------------------------------------------------------------------
 
-def test_marketing_site_rejects_ambiguous_multi_org_database() -> None:
+def test_marketing_site_rejects_ambiguous_multi_org_database(monkeypatch) -> None:
     import importlib.util
-    import sys as _sys
     from pathlib import Path
 
+    monkeypatch.delenv("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", raising=False)
     lead_path = Path(__file__).resolve().parents[1] / "marketing-site" / "api" / "lead.py"
     spec = importlib.util.spec_from_file_location("marketing_lead_module", lead_path)
     module = importlib.util.module_from_spec(spec)
@@ -414,13 +414,14 @@ def test_marketing_site_rejects_ambiguous_multi_org_database() -> None:
     fake_conn.cursor.return_value = fake_cursor
 
     with pytest.raises(module.AmbiguousMultiOrgDatabaseError):
-        module._reject_if_ambiguous_multi_org(fake_conn)
+        module._resolve_target_organization_id(fake_conn)
 
 
-def test_marketing_site_allows_single_org_database() -> None:
+def test_marketing_site_allows_single_org_database(monkeypatch) -> None:
     import importlib.util
     from pathlib import Path
 
+    monkeypatch.delenv("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", raising=False)
     lead_path = Path(__file__).resolve().parents[1] / "marketing-site" / "api" / "lead.py"
     spec = importlib.util.spec_from_file_location("marketing_lead_module_single", lead_path)
     module = importlib.util.module_from_spec(spec)
@@ -429,11 +430,59 @@ def test_marketing_site_allows_single_org_database() -> None:
     fake_cursor = MagicMock()
     fake_cursor.__enter__ = MagicMock(return_value=fake_cursor)
     fake_cursor.__exit__ = MagicMock(return_value=False)
-    fake_cursor.fetchone.side_effect = [("organizations",), (1,)]
+    fake_cursor.fetchone.side_effect = [("organizations",), (1,), (7,)]
     fake_conn = MagicMock()
     fake_conn.cursor.return_value = fake_cursor
 
-    module._reject_if_ambiguous_multi_org(fake_conn)  # must not raise
+    org_id = module._resolve_target_organization_id(fake_conn)  # must not raise
+    assert org_id == 7
+
+
+def test_marketing_site_resolves_via_configured_slug(monkeypatch) -> None:
+    import importlib.util
+    from pathlib import Path
+
+    monkeypatch.setenv("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", "beyond-pain")
+    lead_path = Path(__file__).resolve().parents[1] / "marketing-site" / "api" / "lead.py"
+    spec = importlib.util.spec_from_file_location("marketing_lead_module_slug", lead_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__ = MagicMock(return_value=fake_cursor)
+    fake_cursor.__exit__ = MagicMock(return_value=False)
+    fake_cursor.fetchone.side_effect = [("organizations",), (42,)]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value = fake_cursor
+
+    org_id = module._resolve_target_organization_id(fake_conn)
+    assert org_id == 42
+    # Even with multiple organizations present, an explicitly-configured
+    # slug resolves deterministically without ever counting rows.
+    fake_cursor.execute.assert_any_call(
+        "SELECT id FROM organizations WHERE slug = %s AND status = 'ACTIVE'", ("beyond-pain",),
+    )
+
+
+def test_marketing_site_unresolved_slug_raises(monkeypatch) -> None:
+    import importlib.util
+    from pathlib import Path
+
+    monkeypatch.setenv("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", "nonexistent-clinic")
+    lead_path = Path(__file__).resolve().parents[1] / "marketing-site" / "api" / "lead.py"
+    spec = importlib.util.spec_from_file_location("marketing_lead_module_bad_slug", lead_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__ = MagicMock(return_value=fake_cursor)
+    fake_cursor.__exit__ = MagicMock(return_value=False)
+    fake_cursor.fetchone.side_effect = [("organizations",), None]
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value = fake_cursor
+
+    with pytest.raises(module.UnresolvedMarketingSiteOrganizationError):
+        module._resolve_target_organization_id(fake_conn)
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +504,7 @@ def test_readiness_verifier_passes_when_properly_configured(monkeypatch) -> None
 
     monkeypatch.setenv("LEADLENS_V2_AUDIT_TENANT_AUTHORITATIVE_ENABLED", "true")
     monkeypatch.setenv("LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED", "true")
+    monkeypatch.setenv("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", "beyond-pain")
     findings = verifier.multi_org_readiness_gate(organizations_count=2)
     levels = [level for level, _ in findings]
     assert "FAIL" not in levels

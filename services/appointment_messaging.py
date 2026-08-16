@@ -14,42 +14,82 @@ transactional messages differently, and a transactional template getting
 flagged as promotional risks the whole clinic's WhatsApp account being
 restricted. Nothing in this module should ever have offer/marketing
 copy folded into it.
+
+Phase 9: both public functions accept an optional `context:
+TenantContext | None = None`. Supplied (the scheduler's 24hr auto-send
+path, which has no live Streamlit session to resolve organization from
+implicitly), every patient lookup, clinic-name read, and WhatsApp
+credential resolution is scoped to that exact organization — closing
+the gap Phase 8.1 documented and deferred. Omitted (ui/patient_crm.py's
+live, human-triggered booking-confirmation call site), behavior is
+unchanged: CRM reads resolve via the live session
+(core.identity.live_organization when CRM-tenant-authoritative mode is
+on), and the WhatsApp client resolves via the same transitional-context
+fallback this module has used since Phase 6.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from core.memory import add_memory_entry, load_company
+from core.memory import add_memory_entry
 from integrations.whatsapp_service import WhatsAppBusinessService
 from services.clinic_data_service import get_record
 
 
-def _whatsapp_client() -> WhatsAppBusinessService:
-    """Phase 6: resolve the same trusted transitional TenantContext every
-    other Phase 5 hook point uses, so a booking confirmation/reminder
-    uses this organization's WhatsApp credentials rather than always
-    reading os.environ. Falls back to the plain (env-reading)
-    constructor on any resolution failure — a DB hiccup must never
-    block a transactional patient message, matching every other
-    Phase 5/6 "shadow resolution never blocks the legacy operation"
-    hook point."""
+def _whatsapp_client(context=None) -> WhatsAppBusinessService:
+    """Phase 6: resolve a trusted TenantContext so a booking confirmation/
+    reminder uses THIS organization's WhatsApp credentials rather than
+    always reading os.environ. Phase 9: when `context` is supplied
+    explicitly (the scheduler's 24hr auto-send path), it is used
+    directly — never re-resolved to the transitional default. Falls back
+    to the plain (env-reading) constructor on any resolution failure — a
+    DB hiccup must never block a transactional patient message, matching
+    every other Phase 5/6 "shadow resolution never blocks the legacy
+    operation" hook point."""
     try:
+        from services.integration_clients import get_whatsapp_client
+
+        if context is not None:
+            return get_whatsapp_client(context)
+
         from core.db.session import session_scope
         from core.identity.tenant_context import build_transitional_context
-        from services.integration_clients import get_whatsapp_client
         from services.integration_credentials import _get_engine
 
         # Same shared-engine reasoning as
         # services/integration_manager_v21.py's _current_tenant_context().
         engine = _get_engine()
         with session_scope(engine) as session:
-            context = build_transitional_context(session)
-        return get_whatsapp_client(context)
+            resolved_context = build_transitional_context(session)
+        return get_whatsapp_client(resolved_context)
     except Exception:  # noqa: BLE001 - must never block a transactional send
         return WhatsAppBusinessService()
 
 
-def _clinic_name() -> str:
+def _clinic_name(organization_id: int | None = None) -> str:
+    """Phase 9: org-scoped when `organization_id` is supplied and
+    org-scoped settings are on — mirrors
+    scheduler/run_scheduled_checks.py::_company_profile()'s fallback
+    rule exactly, so a scheduler-driven send never reads a different
+    organization's business name."""
+    if organization_id is not None:
+        from services.platform_data import ORG_SCOPED_SETTINGS_ENABLED
+
+        if ORG_SCOPED_SETTINGS_ENABLED:
+            try:
+                from core.db.session import session_scope
+                from core.identity.organization_profile_service import get_settings
+                from services.platform_data import _get_engine
+
+                with session_scope(_get_engine()) as session:
+                    name = get_settings(session, organization_id).get("business_name")
+                    if name:
+                        return name
+            except Exception:  # noqa: BLE001 - must never block a transactional send
+                pass
+
+    from core.memory import load_company
+
     return load_company().get("business_name") or "the clinic"
 
 
@@ -64,12 +104,12 @@ def _log(summary: str, status: str) -> None:
     )
 
 
-def _patient_for_appointment(appointment: dict[str, Any]) -> dict[str, Any] | None:
+def _patient_for_appointment(appointment: dict[str, Any], *, organization_id: int | None = None) -> dict[str, Any] | None:
     """Shared consent/phone gate for every auto-send in this module.
     Returns the patient record if it's safe to message them, else None —
     silently, since a missing phone/consent isn't an error, just nothing
     to send to."""
-    patient = get_record("patients", str(appointment.get("patient_id", "")))
+    patient = get_record("patients", str(appointment.get("patient_id", "")), organization_id=organization_id)
     if not patient:
         return None
     if not bool(patient.get("consent_to_contact", False)):
@@ -79,8 +119,8 @@ def _patient_for_appointment(appointment: dict[str, Any]) -> dict[str, Any] | No
     return patient
 
 
-def _send(phone: str, body: str, log_summary: str) -> dict[str, Any]:
-    result = _whatsapp_client().send_text({"to": phone, "body": body})
+def _send(phone: str, body: str, log_summary: str, *, context=None) -> dict[str, Any]:
+    result = _whatsapp_client(context).send_text({"to": phone, "body": body})
     mode = "simulated" if result.status == "simulated" else result.status
     _log(f"{log_summary} ({mode})", "Completed" if result.success else "Failed")
     return {
@@ -91,14 +131,15 @@ def _send(phone: str, body: str, log_summary: str) -> dict[str, Any]:
     }
 
 
-def send_appointment_confirmation(appointment: dict[str, Any]) -> dict[str, Any] | None:
+def send_appointment_confirmation(appointment: dict[str, Any], *, context=None) -> dict[str, Any] | None:
     """Send an immediate WhatsApp confirmation for a just-booked appointment."""
-    patient = _patient_for_appointment(appointment)
+    organization_id = context.organization_id if context is not None else None
+    patient = _patient_for_appointment(appointment, organization_id=organization_id)
     if patient is None:
         return None
 
     name = patient.get("name") or "there"
-    clinic = _clinic_name()
+    clinic = _clinic_name(organization_id)
     appt_date = appointment.get("appointment_date", "")
     appt_time = appointment.get("appointment_time", "")
     service = appointment.get("service") or "your session"
@@ -110,21 +151,23 @@ def send_appointment_confirmation(appointment: dict[str, Any]) -> dict[str, Any]
         patient["phone"],
         body,
         f"Sent booking confirmation to {name} for {appt_date} {appt_time}",
+        context=context,
     )
 
 
-def send_appointment_rsvp_reminder(appointment: dict[str, Any]) -> dict[str, Any] | None:
+def send_appointment_rsvp_reminder(appointment: dict[str, Any], *, context=None) -> dict[str, Any] | None:
     """Send the 24-hours-before RSVP reminder for a Scheduled appointment.
 
     Asks the patient to confirm or flag a reschedule, rather than just
     stating the time — this is what distinguishes it from a plain
     reminder per the founder's request."""
-    patient = _patient_for_appointment(appointment)
+    organization_id = context.organization_id if context is not None else None
+    patient = _patient_for_appointment(appointment, organization_id=organization_id)
     if patient is None:
         return None
 
     name = patient.get("name") or "there"
-    clinic = _clinic_name()
+    clinic = _clinic_name(organization_id)
     appt_date = appointment.get("appointment_date", "")
     appt_time = appointment.get("appointment_time", "")
     service = appointment.get("service") or "your session"
@@ -137,4 +180,5 @@ def send_appointment_rsvp_reminder(appointment: dict[str, Any]) -> dict[str, Any
         patient["phone"],
         body,
         f"Sent 24hr RSVP reminder to {name} for {appt_date} {appt_time}",
+        context=context,
     )

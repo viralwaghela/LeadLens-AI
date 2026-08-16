@@ -649,15 +649,12 @@ def appointment_reminder(context: "TenantContext | None" = None) -> CheckResult:
     tied to a specific appointment, not an ongoing situation like the
     other checks in this file.
 
-    Phase 8.1 known limitation: the 24hr branch's
-    send_appointment_rsvp_reminder() call is NOT yet organization-context
-    aware (services/appointment_messaging.py resolves its patient lookup,
-    clinic name, and WhatsApp credentials implicitly, the same way this
-    whole file did before Phase 8.1) — CRM reads for it below are
-    correctly org-scoped, but the actual send still resolves credentials
-    via the transitional default organization regardless of which
-    organization is being enumerated. Tracked as remaining technical
-    debt — see docs/V2_PHASE8_SAAS_ONBOARDING.md's Phase 8.1 addendum."""
+    Phase 9: the 24hr branch's send_appointment_rsvp_reminder() call now
+    receives this check's own `context` explicitly, so its patient
+    lookup, clinic-name read, and WhatsApp credential resolution are all
+    scoped to the organization being enumerated — closing the gap
+    Phase 8.1 documented and deferred (see
+    docs/V2_PHASE9_PRODUCTION_HARDENING.md)."""
     from datetime import datetime
 
     from services.appointment_messaging import send_appointment_rsvp_reminder
@@ -702,7 +699,7 @@ def appointment_reminder(context: "TenantContext | None" = None) -> CheckResult:
                 if already_flagged("appointment_reminder", item_key, organization_id=org_id):
                     skipped_duplicate += 1
                     continue
-                result = send_appointment_rsvp_reminder(appointment)
+                result = send_appointment_rsvp_reminder(appointment, context=context)
                 # None means no consent/phone on file — nothing to send,
                 # and not worth tracking as "sent" or retrying every run,
                 # so still mark it flagged either way.

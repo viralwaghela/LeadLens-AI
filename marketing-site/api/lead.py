@@ -15,12 +15,44 @@ settings (never committed): DATABASE_URL — the exact same Postgres
 connection string configured as this clinic's DATABASE_URL in its
 Streamlit Cloud app secrets. Using any other database here would create
 leads nobody in the CRM ever sees.
+
+Phase 9 — explicitly tenant-aware:
+
+Every lead written by this endpoint is now attributed to exactly one
+trusted organization, resolved by `_resolve_target_organization_id()`
+BEFORE any write happens — never inferred from client-supplied request
+data. Two resolution modes:
+
+  1. `LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG` is set (the deployment-
+     bound trusted boundary the Phase 9 spec calls for — one Vercel
+     project = one DATABASE_URL = one clinic, so binding it to one
+     explicit, operator-configured slug is the natural, smallest-safe
+     design): resolved against the real, ACTIVE `organizations` row —
+     never trusted blindly, always validated.
+  2. Not set, and exactly one organization exists in the database: that
+     organization, unambiguously — the common single-clinic case, no
+     extra configuration required.
+
+Any other case (not set, and more than one organization exists) refuses
+to write at all (`AmbiguousMultiOrgDatabaseError`, unchanged from Phase
+8.1) rather than guessing.
+
+The legacy `memory_store` write remains authoritative and unconditional
+for the resolved organization's leads (same "legacy remains
+authoritative" contract every other Phase 3+ dual-write in this codebase
+uses) — this is what the live CRM UI reads today. A best-effort shadow
+write additionally lands the lead in the relational, organization-scoped
+`leads` table (core/db/models/clinic.py's `Lead`, already correctly
+tenant-scoped since Phase 0) via raw SQL — mirroring
+services/relational_sync_service.py's upsert-by-external_id shape
+without importing the ORM cross-project. A shadow-write failure is
+logged and swallowed; it must never block the legacy, user-facing write.
 """
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
 MAX_NAME = 200
@@ -50,41 +82,82 @@ def _next_lead_id(leads: list[dict]) -> str:
 
 
 class AmbiguousMultiOrgDatabaseError(Exception):
-    """Phase 8.1: this endpoint has no organization concept at all — it
-    writes straight into the single legacy memory_store id=1 row. That is
-    fine for a single-clinic DATABASE_URL (the only supported
-    configuration today), but would be silently wrong the moment this
-    database is shared by more than one Organization (Phase 0's
-    `organizations` table) — a lead submitted through this public form
-    would land in an arbitrary/first clinic's data with no way to tell
-    which clinic the visitor meant. Rather than do that silently, this
-    endpoint refuses to write at all if it detects more than one
-    organization row. See docs/V2_PHASE8_SAAS_ONBOARDING.md's Phase 8.1
-    addendum — this is a minimal safety guard, not a fix; making this
-    endpoint genuinely organization-aware is out of scope here."""
+    """Raised when more than one organization exists in the target
+    database and LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG has not been
+    configured to disambiguate which one this deployment's public leads
+    belong to. Refusing to write is the safe default — never guess which
+    clinic a visitor meant."""
 
 
-def _reject_if_ambiguous_multi_org(conn) -> None:
+class UnresolvedMarketingSiteOrganizationError(Exception):
+    """Raised when LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG is set but
+    does not match any ACTIVE organization in the database — a
+    misconfiguration, not something to silently fall back from."""
+
+
+def _resolve_target_organization_id(conn) -> int | None:
+    """Returns the exactly one organization this deployment's leads
+    belong to, or None if the `organizations` table doesn't exist yet
+    (a pre-Phase-0 database — full legacy behavior, unaffected by any of
+    this). Never accepts an organization id from the incoming request —
+    the only inputs are this process's own environment configuration and
+    the database's own row count."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.organizations')")
+        if cur.fetchone()[0] is None:
+            return None
+
+        slug = os.environ.get("LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG", "").strip()
+        if slug:
+            cur.execute(
+                "SELECT id FROM organizations WHERE slug = %s AND status = 'ACTIVE'",
+                (slug,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise UnresolvedMarketingSiteOrganizationError(
+                    f"LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG={slug!r} does not match any "
+                    "ACTIVE organization in this database."
+                )
+            return row[0]
+
+        cur.execute("SELECT count(*) FROM organizations")
+        count = cur.fetchone()[0]
+        if count == 0:
+            return None
+        if count > 1:
+            raise AmbiguousMultiOrgDatabaseError(
+                f"{count} organizations exist in this database and "
+                "LEADLENS_MARKETING_SITE_ORGANIZATION_SLUG is not set; this endpoint "
+                "refuses to write ambiguously."
+            )
+        cur.execute("SELECT id FROM organizations LIMIT 1")
+        return cur.fetchone()[0]
+
+
+def _shadow_write_relational_lead(conn, organization_id: int, lead: dict, now: datetime) -> None:
+    """Best-effort, never blocks the legacy write. Mirrors
+    services/relational_sync_service.py's upsert-by-(organization_id,
+    external_id) shape in raw SQL, since this file deliberately doesn't
+    import the main app's ORM (see module docstring)."""
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('public.organizations')")
-            table_exists = cur.fetchone()[0] is not None
-            if not table_exists:
-                return  # pre-Phase-0 database — nothing to check, behave as always
-            cur.execute("SELECT count(*) FROM organizations")
-            count = cur.fetchone()[0]
-    except Exception:
-        # A data-hygiene guard, not an authorization boundary: if the
-        # check itself fails (unexpected schema, permissions, etc.), fail
-        # OPEN here rather than breaking every single-clinic deployment's
-        # working booking form over a guard that was only ever meant to
-        # catch the specific, currently-hypothetical multi-org case.
-        return
-    if count > 1:
-        raise AmbiguousMultiOrgDatabaseError(
-            f"{count} organizations exist in this database; this endpoint "
-            "is not organization-aware and refuses to write ambiguously."
-        )
+            cur.execute(
+                """
+                INSERT INTO leads
+                    (organization_id, external_id, name, phone, email, message, source, status, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (organization_id, external_id) DO NOTHING
+                """,
+                (
+                    organization_id, lead["lead_id"], lead["name"], lead["phone"] or None,
+                    lead["email"] or None, lead["message"] or None, lead["source"], lead["status"],
+                    now, now,
+                ),
+            )
+        conn.commit()
+    except Exception:  # noqa: BLE001 - shadow write must never break the public form
+        conn.rollback()
 
 
 def _insert_lead(database_url: str, name: str, phone: str, email: str, message: str) -> str:
@@ -92,7 +165,7 @@ def _insert_lead(database_url: str, name: str, phone: str, email: str, message: 
 
     conn = psycopg2.connect(database_url)
     try:
-        _reject_if_ambiguous_multi_org(conn)
+        organization_id = _resolve_target_organization_id(conn)
         with conn:
             with conn.cursor() as cur:
                 # Same guard as core/memory.py's _pg_atomic_update: bounded
@@ -105,8 +178,8 @@ def _insert_lead(database_url: str, name: str, phone: str, email: str, message: 
                 leads = payload.setdefault("clinic_leads", [])
 
                 new_id = _next_lead_id(leads)
-                now = datetime.now().isoformat(timespec="seconds")
-                leads.append({
+                now_text = datetime.now().isoformat(timespec="seconds")
+                lead = {
                     "lead_id": new_id,
                     "name": name,
                     "phone": phone,
@@ -114,23 +187,28 @@ def _insert_lead(database_url: str, name: str, phone: str, email: str, message: 
                     "message": message,
                     "source": "Website",
                     "status": "New",
-                    "created_at": now,
-                    "updated_at": now,
-                })
+                    "created_at": now_text,
+                    "updated_at": now_text,
+                }
+                leads.append(lead)
 
                 encoded = json.dumps(payload, ensure_ascii=False)
                 if row is None:
                     cur.execute(
                         "INSERT INTO memory_store (id, payload, updated_at, version) "
                         "VALUES (1, %s, %s, 1)",
-                        (encoded, now),
+                        (encoded, now_text),
                     )
                 else:
                     cur.execute(
                         "UPDATE memory_store SET payload = %s, version = version + 1, "
                         "updated_at = %s WHERE id = 1",
-                        (encoded, now),
+                        (encoded, now_text),
                     )
+
+        if organization_id is not None:
+            _shadow_write_relational_lead(conn, organization_id, lead, datetime.now(timezone.utc))
+
         return new_id
     finally:
         conn.close()
