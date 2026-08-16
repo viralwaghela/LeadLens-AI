@@ -175,23 +175,28 @@ def configure_integration(
     actor: str = "system",
 ) -> OrganizationIntegration:
     """Create or update this organization's integration row. Encrypts
-    `secret_fields` as one blob (if provided — omitting it leaves any
-    previously-stored secret untouched, so a caller can update just
-    configuration without re-supplying the secret). Transactional: the
-    encrypt + upsert + flush happen as one unit: either the whole update
-    lands or none of it does (spec section 27).
+    `secret_fields` as one blob (if provided and non-empty — omitting it,
+    or passing an empty dict, leaves any previously-stored secret
+    untouched, so a caller can update just configuration without
+    re-supplying the secret). Transactional: the encrypt + upsert +
+    flush happen as one unit: either the whole update lands or none of
+    it does (spec section 27).
 
     Phase 6.1 status fix (Phase 6 audit finding): status is no longer
     set to ACTIVE unconditionally.
-      - `secret_fields` supplied (a secret was just configured/
-        reconfigured) -> ACTIVE, and any prior error state is cleared —
-        this is the one "reconfigure/reactivate" action in this API.
-      - `secret_fields` omitted AND no secret has ever been stored on
-        this row -> UNCONFIGURED. Non-secret configuration alone (e.g.
-        just a phone_number_id) never makes an integration usable.
-      - `secret_fields` omitted AND a secret already exists -> status is
-        left exactly as it was (ACTIVE stays ACTIVE, DISABLED stays
-        DISABLED, ERROR stays ERROR) — a config-only update never
+      - `secret_fields` supplied and non-empty (a secret was just
+        configured/reconfigured) -> ACTIVE, and any prior error state
+        is cleared — this is the one "reconfigure/reactivate" action in
+        this API.
+      - `secret_fields` omitted or empty ({}) AND no secret has ever
+        been stored on this row -> UNCONFIGURED. Non-secret
+        configuration alone (e.g. just a phone_number_id) never makes
+        an integration usable (Phase 6.1.1 defensive guard: an explicit
+        empty dict is treated exactly like omitting the parameter, so
+        it can never encrypt-and-store an unusable empty secret).
+      - `secret_fields` omitted or empty AND a secret already exists ->
+        status is left exactly as it was (ACTIVE stays ACTIVE, DISABLED
+        stays DISABLED, ERROR stays ERROR) — a config-only update never
         silently reactivates a disabled integration or clears an error
         it didn't actually fix."""
     row = get_integration(session, tenant_context.organization_id, provider)
@@ -203,7 +208,14 @@ def configure_integration(
         )
         session.add(row)
 
-    if secret_fields is not None:
+    # Phase 6.1.1 defensive guard: an explicit empty dict ({}) is treated
+    # exactly like omitting secret_fields entirely — neither counts as
+    # "a secret was supplied." Without this, secret_fields={} would
+    # encrypt and store an empty payload, potentially overwriting a real
+    # existing secret and marking the row ACTIVE with nothing usable.
+    has_new_secret = bool(secret_fields)
+
+    if has_new_secret:
         ciphertext, key_version = encrypt_credential_fields(secret_fields)
         row.encrypted_credentials = ciphertext
         row.encryption_key_version = key_version
@@ -213,7 +225,7 @@ def configure_integration(
         merged.update(configuration_fields)
         row.configuration = json.dumps(merged, ensure_ascii=False, default=str)
 
-    if secret_fields is not None:
+    if has_new_secret:
         row.status = IntegrationStatus.ACTIVE
         row.last_error_at = None
         row.last_error_code = None

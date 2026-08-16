@@ -176,12 +176,20 @@ def _validate(
 
 
 def _fingerprint(
+    organization_id: int,
     provider: str,
     action: str,
     payload: dict[str, Any],
 ) -> str:
+    """Phase 6.1.1 fix: `organization_id` is now part of the identity
+    this fingerprint represents. Two organizations preparing
+    byte-identical provider/action/payload content are independent
+    business events, not the same event — see the Phase 6.1 audit
+    finding this closes. Within one organization, existing dedup
+    semantics (identical content while a prior instance is still
+    Awaiting approval/Approved) are unchanged."""
     canonical = json.dumps(
-        [provider, action, payload],
+        [organization_id, provider, action, payload],
         sort_keys=True,
         ensure_ascii=False,
         default=str,
@@ -217,14 +225,35 @@ def prepare_execution(
     ambient default. If no organization can be resolved at all (e.g.
     the database is unreachable), the action is deliberately not
     prepared: creating an item with no provable tenant identity would
-    only defer today's failure into a confusing one at execution time."""
+    only defer today's failure into a confusing one at execution time.
+
+    Phase 6.1.1 fix: organization context is now resolved BEFORE the
+    dedup lookup (previously it was resolved after), because dedup
+    identity itself is now organization-scoped — see _fingerprint()'s
+    docstring and docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md. Both the
+    fingerprint content and the existing-item lookup filter include
+    organization_id (belt-and-braces): two organizations preparing
+    byte-identical content each get their own queue item and approval;
+    a legacy queue item with no organization_id (created before this
+    fix shipped) can never satisfy a new, organization-scoped dedup
+    lookup for any organization, and simply falls out of consideration
+    — it is not treated as belonging to any organization, and a fresh
+    item is created instead."""
     provider, action, payload = _validate(provider, action, payload)
-    fingerprint = _fingerprint(provider, action, payload)
+
+    context = tenant_context or _current_tenant_context()
+    if context is None:
+        raise RuntimeError(
+            "Could not resolve an organization context; action was not prepared."
+        )
+
+    fingerprint = _fingerprint(context.organization_id, provider, action, payload)
     rows = _load()
     existing = next(
         (
             row for row in rows
             if row.get("fingerprint") == fingerprint
+            and row.get("organization_id") == context.organization_id
             and row.get("status") in {
                 "Awaiting approval",
                 "Approved",
@@ -234,12 +263,6 @@ def prepare_execution(
     )
     if existing:
         return copy.deepcopy(existing)
-
-    context = tenant_context or _current_tenant_context()
-    if context is None:
-        raise RuntimeError(
-            "Could not resolve an organization context; action was not prepared."
-        )
 
     item_id = f"EXEC-{uuid4().hex[:10].upper()}"
     clean_title = _clean(

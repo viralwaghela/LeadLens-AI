@@ -465,3 +465,179 @@ def test_redact_still_available_and_correct_though_unwired() -> None:
     redacted = ce.redact({"access_token": "fake-unwired-secret", "phone_number_id": "PHONE-1"})
     assert redacted["access_token"] == "***REDACTED***"
     assert redacted["phone_number_id"] == "PHONE-1"
+
+
+# ---------------------------------------------------------------------------
+# Phase 6.1.1 — dedup tenant-boundary fix
+# ---------------------------------------------------------------------------
+
+def test_same_org_dedup_preserved(isolated) -> None:
+    """Within one organization, preparing byte-identical content twice
+    while the first is still Awaiting approval must return the SAME
+    item (existing dedup semantics), not create a duplicate."""
+    with Session(isolated) as session:
+        org = organization_service.create_organization(session, name="Same Org Dedup", slug="same-org-dedup")
+        session.commit()
+        context = _context(org.id)
+
+    payload = {"to": "1", "body": "same content"}
+    first = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context)
+    second = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context)
+    assert first["id"] == second["id"]
+
+
+def test_cross_org_identical_payload_creates_independent_items(isolated) -> None:
+    with Session(isolated) as session:
+        org_a = organization_service.create_organization(session, name="Dedup Fix A", slug="dedup-fix-a")
+        org_b = organization_service.create_organization(session, name="Dedup Fix B", slug="dedup-fix-b")
+        session.commit()
+        context_a, context_b = _context(org_a.id), _context(org_b.id)
+
+    payload = {"to": "919999999999", "body": "identical templated reminder text"}
+    item_a = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_a)
+    item_b = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_b)
+
+    assert item_a["id"] != item_b["id"]
+    assert item_a["organization_id"] == org_a.id
+    assert item_b["organization_id"] == org_b.id
+    assert item_a["fingerprint"] != item_b["fingerprint"]
+
+    approval_a = mgr._get_approval_row(item_a["approval_id"])
+    approval_b = mgr._get_approval_row(item_b["approval_id"])
+    assert approval_a["data"]["organization_id"] == org_a.id
+    assert approval_b["data"]["organization_id"] == org_b.id
+    assert item_a["approval_id"] != item_b["approval_id"]
+
+
+def test_overlapping_business_ids_still_independent_across_orgs(isolated) -> None:
+    """Identical provider/action/payload AND identical business
+    identifiers embedded in the payload (appointment id, patient id) —
+    still independent per-organization events."""
+    with Session(isolated) as session:
+        org_a = organization_service.create_organization(session, name="Overlap A", slug="overlap-a")
+        org_b = organization_service.create_organization(session, name="Overlap B", slug="overlap-b")
+        session.commit()
+        context_a, context_b = _context(org_a.id), _context(org_b.id)
+
+    payload = {
+        "to": "919999999999",
+        "body": "Hi, appointment APT-001 for patient P-001 is confirmed.",
+    }
+    item_a = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_a)
+    item_b = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_b)
+    assert item_a["id"] != item_b["id"]
+    assert item_a["organization_id"] != item_b["organization_id"]
+
+
+def test_status_sensitive_dedup_unchanged(isolated) -> None:
+    """Existing semantics: only "Awaiting approval"/"Approved" satisfy
+    dedup. A Rejected action does not suppress a fresh identical
+    request — this must remain true within one organization after the
+    fix, unchanged from pre-6.1.1 behavior."""
+    with Session(isolated) as session:
+        org = organization_service.create_organization(session, name="Status Dedup Org", slug="status-dedup-org")
+        session.commit()
+        context = _context(org.id)
+
+    payload = {"to": "1", "body": "status sensitive"}
+    first = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context)
+    mgr.decide_item(first["id"], "Rejected")
+    second = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context)
+    assert second["id"] != first["id"]
+
+
+def test_a_b_a_execution_with_overlapping_content_no_credential_bleed(isolated, captured_requests) -> None:
+    with Session(isolated) as session:
+        org_a = organization_service.create_organization(session, name="ABA Overlap A", slug="aba-overlap-a")
+        org_b = organization_service.create_organization(session, name="ABA Overlap B", slug="aba-overlap-b")
+        _configure_whatsapp(session, org_a.id, FAKE_A)
+        _configure_whatsapp(session, org_b.id, FAKE_B)
+        session.commit()
+        context_a, context_b = _context(org_a.id), _context(org_b.id)
+
+    payload = {"to": "919999999999", "body": "identical reminder for patient P-001"}
+    item_a = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_a)
+    item_b = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context_b)
+    assert item_a["id"] != item_b["id"]
+
+    mgr.decide_item(item_a["id"], "Approved")
+    mgr.decide_item(item_b["id"], "Approved")
+
+    mgr.execute_item(item_a["id"])
+    assert captured_requests[-1]["headers"]["Authorization"] == f"Bearer {FAKE_A['access_token']}"
+    mgr.execute_item(item_b["id"])
+    assert captured_requests[-1]["headers"]["Authorization"] == f"Bearer {FAKE_B['access_token']}"
+    mgr.execute_item(item_a["id"])  # already executed -> returns cached result, still A's
+    assert item_a["organization_id"] == org_a.id
+
+
+def test_legacy_item_without_organization_id_never_satisfies_new_dedup(isolated) -> None:
+    """A pre-6.1.1 queue item (no organization_id, old-format
+    fingerprint) sitting in the legacy store must never be returned as
+    a dedup match for a NEW, organization-scoped prepare_execution()
+    call — it simply falls out of consideration and a fresh item is
+    created."""
+    with Session(isolated) as session:
+        org = organization_service.create_organization(session, name="Legacy Compat Org", slug="legacy-compat-org")
+        session.commit()
+        context = _context(org.id)
+
+    payload = {"to": "1", "body": "legacy compat"}
+    # Simulate a pre-6.1.1 item: old-format fingerprint (no org id mixed
+    # in), no organization_id field at all.
+    import hashlib
+    import json as _json
+
+    old_fingerprint = hashlib.sha256(
+        _json.dumps(["whatsapp", "send_text", payload], sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()[:20]
+    legacy_item = {
+        "id": "EXEC-LEGACYITEM",
+        "provider": "whatsapp",
+        "action": "send_text",
+        "payload": payload,
+        "title": "Legacy item",
+        "fingerprint": old_fingerprint,
+        "status": "Awaiting approval",
+        "approval_id": "",
+        "approval_status": "Pending",
+        "created_at": "2026-01-01T00:00:00",
+        "approved_at": "",
+        "executed_at": "",
+        "result": None,
+    }
+    rows = mgr._load()
+    rows.append(legacy_item)
+    mgr._save(rows)
+
+    fresh = mgr.prepare_execution("whatsapp", "send_text", payload, tenant_context=context)
+    assert fresh["id"] != "EXEC-LEGACYITEM"
+    assert fresh["organization_id"] == org.id
+
+
+# ---------------------------------------------------------------------------
+# Empty-secret defensive guard (Phase 6.1.1 section 12)
+# ---------------------------------------------------------------------------
+
+def test_empty_secret_dict_does_not_activate_fresh_integration(isolated) -> None:
+    with Session(isolated) as session:
+        org = organization_service.create_organization(session, name="Empty Secret Org", slug="empty-secret-org")
+        row = ic.configure_integration(session, _context(org.id), IntegrationProvider.WHATSAPP, secret_fields={}, configuration_fields={"phone_number_id": "P-1"})
+        session.commit()
+        assert row.status == IntegrationStatus.UNCONFIGURED
+        assert row.encrypted_credentials is None
+
+
+def test_empty_secret_dict_does_not_overwrite_existing_active_secret(isolated) -> None:
+    with Session(isolated) as session:
+        org = organization_service.create_organization(session, name="Empty Secret Preserve Org", slug="empty-secret-preserve-org")
+        context = _context(org.id)
+        ic.configure_integration(session, context, IntegrationProvider.WHATSAPP, secret_fields=FAKE_A, configuration_fields={"phone_number_id": FAKE_A["phone_number_id"]})
+        session.commit()
+        original = ic.get_integration(session, org.id, IntegrationProvider.WHATSAPP)
+        original_ciphertext = original.encrypted_credentials
+
+        row = ic.configure_integration(session, context, IntegrationProvider.WHATSAPP, secret_fields={}, configuration_fields={"phone_number_id": "NEW-PHONE"})
+        session.commit()
+        assert row.status == IntegrationStatus.ACTIVE
+        assert row.encrypted_credentials == original_ciphertext  # untouched, not wiped
