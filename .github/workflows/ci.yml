@@ -2,34 +2,40 @@ name: CI
 
 # The V2 audit found that the existing test suite (pytest-collectible AND
 # script-style regression tests, see tests/) was never run automatically
-# anywhere. This closes that gap, and adds Phase 0's through Phase 6's
+# anywhere. This closes that gap, and adds Phase 0's through Phase 7's
 # own checks. None of Phase 1 (core/identity/), Phase 2
 # (services/jarvis_memory.py's DB-backed storage), Phase 3 (CRM
 # relational dual-write), Phase 4 (CRM relational read cutover), Phase 5
-# (tenant-scoped operational shadow-sync), or Phase 6 (per-organization
-# integration credential encryption/resolution) need an extra CI step
-# beyond the existing `pytest tests/ -v` — tests/test_phase1_identity.py,
+# (tenant-scoped operational shadow-sync), Phase 6 (per-organization
+# integration credential encryption/resolution), or Phase 7 (live auth
+# cutover + RBAC) need an extra CI step beyond the existing
+# `pytest tests/ -v` — tests/test_phase1_identity.py,
 # tests/test_phase2_jarvis_memory.py, tests/test_phase3_crm_dual_write.py,
 # tests/test_phase4_crm_read_cutover.py, tests/test_phase5_tenant_context.py,
-# and tests/test_phase6_integration_credentials.py are all
-# pytest-collectible like tests/test_phase0_schema.py, and all exercise
-# backfill/repair/parity/read-routing/tenant-resolution/credential-encryption
-# logic through injected test fixtures/engines and obviously-fake test
-# secrets only — never a real DATABASE_URL, never a real provider API
-# call, never scripts/*.py invoked directly against any real database,
-# and CI never sets any LEADLENS_V2_READ_*, LEADLENS_V2_DUAL_WRITE_ENABLED,
-# LEADLENS_V2_TENANT_CONTEXT_ENABLED, or
-# LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED cutover flag, so CI can never
-# accidentally activate production cutover behavior. Argon2id password
-# hashing (Phase 1) is fully local, Phase 2/3/4/5's DB/JSON storage is
-# fully local too, and Phase 6's Fernet encryption runs against a
+# tests/test_phase6_integration_credentials.py,
+# tests/test_phase7_auth_cutover.py, tests/test_phase7_audit.py,
+# tests/test_phase7_1_hardening.py, and tests/test_phase7_1_1_hardening.py
+# are all pytest-collectible like
+# tests/test_phase0_schema.py, and all exercise
+# backfill/repair/parity/read-routing/tenant-resolution/credential-encryption/
+# authentication/RBAC logic through injected test fixtures/engines and
+# obviously-fake test credentials only — never a real DATABASE_URL,
+# never a real provider API call, never scripts/*.py invoked directly
+# against any real database, and CI never sets any LEADLENS_V2_READ_*,
+# LEADLENS_V2_DUAL_WRITE_ENABLED, LEADLENS_V2_TENANT_CONTEXT_ENABLED,
+# LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED, or LEADLENS_V2_AUTH_ENABLED
+# cutover flag, so CI can never accidentally activate production
+# cutover behavior. Argon2id password hashing (Phase 1, and every
+# Phase 7/7.1 test account) is fully local, Phase 2/3/4/5's DB/JSON storage
+# is fully local too, and Phase 6's Fernet encryption runs against a
 # per-test-generated throwaway key (never a real
 # LEADLENS_CREDENTIAL_ENCRYPTION_KEY) — no external service, no secret,
 # needed for any of it.
 #
 # Deliberately does NOT reference any real secret (DATABASE_URL,
 # OPENAI_API_KEY, WHATSAPP_*, GMAIL_*, GOOGLE_*,
-# LEADLENS_CREDENTIAL_ENCRYPTION_KEY) anywhere in this file — every job
+# LEADLENS_CREDENTIAL_ENCRYPTION_KEY, APP_PASSWORD) anywhere in this
+# file — every job
 # here runs with a clean environment. tests/_bootstrap.py's guard
 # (hard-fails if DATABASE_URL is already set at import time, and strips
 # it from every load_dotenv() call afterward) means the existing test
@@ -66,7 +72,7 @@ jobs:
 
       - name: Confirm no real DATABASE_URL/API secrets are present in this job's environment
         run: |
-          for var in DATABASE_URL OPENAI_API_KEY WHATSAPP_ACCESS_TOKEN GOOGLE_SERVICE_ACCOUNT_FILE; do
+          for var in DATABASE_URL OPENAI_API_KEY WHATSAPP_ACCESS_TOKEN GOOGLE_SERVICE_ACCOUNT_FILE APP_PASSWORD; do
             if [ -n "${!var:-}" ]; then
               echo "::error::$var is unexpectedly set in the CI environment — refusing to run tests."
               exit 1
@@ -74,7 +80,7 @@ jobs:
           done
           echo "Clean environment confirmed — no real credentials present."
 
-      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6)
+      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 7.1 + Phase 7.1.1)
         run: python -m pytest tests/ -v
 
       - name: Run script-style regression tests
@@ -117,7 +123,7 @@ jobs:
           echo "reproducing it against a clean pre-Phase-0 tree). Not fixed here per scope"
           echo "discipline. See docs/V2_COEXISTENCE.md."
 
-      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6)
+      - name: Alembic — upgrade from empty database (Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7)
         run: |
           export DATABASE_URL="sqlite:///$RUNNER_TEMP/phase0_ci_check.db"
           python -m alembic upgrade head

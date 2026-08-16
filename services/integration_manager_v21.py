@@ -338,6 +338,9 @@ def _shadow_sync_approval_and_item(approval: dict[str, Any] | None, item: dict[s
 
 def decide_item(item_id: str, decision: str) -> dict[str, Any]:
     """Approve or reject a prepared action."""
+    from services.authorization_guard import require_permission
+
+    require_permission("automations.approve")
     canonical = _clean(decision, 20).title()
     if canonical not in {"Approved", "Rejected"}:
         raise ValueError("Decision must be Approved or Rejected.")
@@ -373,6 +376,9 @@ def decide_item(item_id: str, decision: str) -> dict[str, Any]:
 
 def execute_item(item_id: str) -> dict[str, Any]:
     """Execute exactly once, and only after approval."""
+    from services.authorization_guard import require_permission
+
+    require_permission("automations.approve")
     rows = _load()
     item = next((row for row in rows if row.get("id") == item_id), None)
     if not item:
@@ -481,6 +487,9 @@ def execute_item(item_id: str) -> dict[str, Any]:
 
 
 def execution_rows() -> list[dict[str, Any]]:
+    from services.authorization_guard import require_permission
+
+    require_permission("automations.view")
     rows = _load()
     changed = False
     for item in rows:

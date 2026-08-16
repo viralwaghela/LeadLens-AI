@@ -64,7 +64,7 @@ feature in its own right.
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
    it first, since it's a significant architectural decision. **V2 Phase
-   0 through 6 have been built** (a relational schema, an identity/
+   0 through 7 have been built** (a relational schema, an identity/
    authorization backend on top of it, Jarvis's learning-memory storage
    now genuinely running through this schema, CRM writes shadow-writing
    into the relational schema, CRM *reads* that can be routed to the
@@ -72,21 +72,25 @@ feature in its own right.
    currently default OFF, a `TenantContext` abstraction plus
    tenant-scoped shadow copies of approvals, the execution queue, audit
    events, and the scheduler ledger, all behind
-   `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**), and — Phase
-   6 — encrypted, organization-scoped WhatsApp/Gmail/Calendar
-   credentials with a transitional environment-variable fallback, behind
-   `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**) — see
-   "V2 migration" below) but Jarvis, the scheduler, approvals, and
-   `core/auth.py`'s shared-password login are all still exclusively
-   legacy and single-tenant in live operation, CRM reads remain legacy
-   in every live deployment until an operator explicitly opts an entity
-   in, and every integration adapter still reads its deployment-wide
-   environment credentials directly until an operator explicitly
-   migrates an organization's credentials into the database; none of
-   these phases change the multi-tenant gap itself — there is still no
-   live tenant-routing cutover, no organization switcher, and no live
-   RBAC enforcement — they only lay groundwork for the phase that
-   eventually will.
+   `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**), encrypted,
+   organization-scoped WhatsApp/Gmail/Calendar credentials with a
+   transitional environment-variable fallback, behind
+   `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**), and —
+   Phase 7 — a real per-user email/password login (Argon2id) plus
+   backend RBAC enforcement across CRM/Jarvis/approvals/integration
+   administration, behind `LEADLENS_V2_AUTH_ENABLED` (**defaults
+   OFF**) — see "V2 migration" below) but the scheduler's live check
+   logic, CRM reads, and every integration adapter's env-vs-tenant
+   credential choice remain legacy/opt-in exactly as before, and —
+   critically — `LEADLENS_V2_AUTH_ENABLED` defaulting OFF means the
+   **historical shared-password login remains the actual production
+   gate** until an operator explicitly cuts over (see
+   `docs/V2_PHASE7_AUTH_CUTOVER.md`'s runbook); none of these phases
+   change the multi-tenant gap itself — there is still no live
+   multi-organization production deployment and no organization
+   switcher beyond Phase 7's minimal picker; RBAC enforcement now
+   exists and is tested, but sits dormant in every live deployment
+   until `LEADLENS_V2_AUTH_ENABLED` is explicitly turned on.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -210,24 +214,87 @@ pre-production, single-clinic deployment, but worth knowing if old
 deploys; re-preparing the action resolves it. See
 `docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for the full audit,
 architecture, and adversarial test suite
-(`tests/test_phase6_integration_credentials.py`). Every other live
-file — `app.py`, `dashboard.py`, `core/auth.py`, the scheduler's check
-functions themselves, the approval/execution engine's actual decision
-logic, the adapters' API-calling logic — is still completely untouched.
-**Do not wire multi-tenant organization switching or authentication
-into a live path without that being its own explicit, discussed
-phase** — see `docs/V2_COEXISTENCE.md` for Phase 0's architecture,
-`docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the full role →
-permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's,
-`docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including the full
-CRM mutation-surface audit and the known `marketing-site/api/lead.py`
-bypass), `docs/V2_PHASE4_READ_CUTOVER.md` for Phase 4's (including the
-full CRM read-path audit and the entity-by-entity production activation
-runbook), `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's, and
+(`tests/test_phase6_integration_credentials.py`). **Phase 7 — the
+explicit, discussed phase the prior "do not wire authentication into a
+live path" warning was waiting for — added a real per-user email/password
+login** behind `LEADLENS_V2_AUTH_ENABLED` (**defaults OFF**):
+`core/auth.py` now has two complete, independently-selected login
+paths (legacy shared-password, unchanged byte-for-byte, vs. Phase 1's
+`core.identity.authentication_service.authenticate()` against real
+Users/Memberships/Organizations) — never both valid in one session.
+`core/identity/session.py`'s `AuthenticatedSession` is revalidated
+against the database on every access
+(`core.auth.current_authenticated_session()`), so a user/membership/
+organization disabled after login loses access within one call, not
+indefinitely. The HMAC reload token that survives the Core switch's
+forced browser navigation was preserved (re-keyed for V2, still only a
+continuity convenience — restoring from it always re-triggers a full
+database check, never trusts a claimed role/organization).
+`services/authorization_guard.py`'s `require_permission()` is the one
+RBAC chokepoint, wired into CRM mutations, approval decide/execute,
+integration-credential administration, and member management; a no-op
+whenever V2 auth is off or no live session exists, so scripts/tests/
+scheduler actors are unaffected. `services/jarvis_tools.py` and
+`services/specialist_orchestration.py` gate finance-sensitive Jarvis
+tool output and specialist selection at the data boundary — this also
+fixed a real pre-existing leak where `business_snapshot` exposed the
+same financial data `revenue_summary` did, under a different tool name.
+`services/member_management.py` provides minimal, backend-scoped
+member administration (an org's admin can never touch another
+organization's membership; the last active OWNER cannot be disabled or
+demoted). See `docs/V2_PHASE7_AUTH_CUTOVER.md` for the full design,
+the production runbook, and the adversarial test suite
+(`tests/test_phase7_auth_cutover.py`). **Phase 7.1** (a focused
+hardening pass on top of Phase 7, no new files/migrations beyond one new
+test file) fixed three real defects an independent audit of Phase 7
+found: a reload token minted just before logout could still silently
+restore the session afterward, within its own 20-second TTL, because
+`clear_session()` only ever cleared `st.session_state` and never touched
+the `_auth` query param a browser-navigation rerun leaves behind — fixed
+with defense in depth (`_render_logout_control_v2()` now explicitly
+clears `st.query_params["_auth"]`, and `clear_session()` now stamps a
+`logout_epoch()` that `_v2_reload_token_identity()` rejects tokens
+minted at-or-before); `services/platform_data.py::save_company_profile()`
+had no RBAC gate at all (any authenticated role could mutate
+organization settings) — now requires `organization.manage`; and the
+audit-log read path (`services/security_service.py::audit_rows()`, the
+only live caller of which is `ui/phases_16_to_20.py`'s "Settings > Data
+protection" tab) had no gate either — now requires `audit.view`. See
+`docs/V2_PHASE7_AUTH_CUTOVER.md`'s Phase 7.1 addendum and
+`tests/test_phase7_1_hardening.py`. **Phase 7.1.1** (a focused hardening
+pass on top of Phase 7.1, no new files/migrations beyond one new test
+file) fixed two defects an independent audit of Phase 7.1 found:
+`onboarding.py` called the always-ungated `core.memory.save_company()`
+directly instead of the RBAC-gated
+`services.platform_data.save_company_profile()`, so any authenticated
+V2-auth identity — not just one with `organization.manage` — could
+initialize the company profile during the first-run window before
+`core.memory.company_exists()` became True; fixed by routing onboarding
+through `save_company_profile()` (legacy mode unaffected, since
+`require_permission()` no-ops there). Separately, `_v2_reload_token()`'s
+`int(time.time())` timestamp compared against
+`core.identity.session.logout_epoch()`'s full-precision float could
+wrongly reject a token minted in the same wall-clock second as a prior
+logout; fixed by using full-precision timestamps on both sides
+(`float()`-parsed, backward compatible with old integer-string tokens).
+See `docs/V2_PHASE7_AUTH_CUTOVER.md`'s Phase 7.1.1 addendum and
+`tests/test_phase7_1_1_hardening.py`. Every other live file — the
+scheduler's check functions themselves, the approval/execution
+engine's actual decision logic, the adapters' API-calling logic — is
+still completely untouched. See `docs/V2_COEXISTENCE.md` for Phase 0's
+architecture, `docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the
+full role → permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for
+Phase 2's, `docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including
+the full CRM mutation-surface audit and the known
+`marketing-site/api/lead.py` bypass), `docs/V2_PHASE4_READ_CUTOVER.md`
+for Phase 4's (including the full CRM read-path audit and the
+entity-by-entity production activation runbook),
+`docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's,
 `docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for Phase 6's (including the
 full integration credential audit and the provider-by-provider
-production migration procedure). Every phase's rollback is the same
-shape — an env-var kill switch, no destructive DB changes needed.
+production migration procedure), and `docs/V2_PHASE7_AUTH_CUTOVER.md`
+for Phase 7's. Every phase's rollback is the same shape — an env-var
+kill switch, no destructive DB changes needed.
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
@@ -235,15 +302,16 @@ own "Do not rebuild" section for the full reasoning per item):
 specialist orchestration, the approval/execution engine, automation
 qualification logic in `scheduler/run_scheduled_checks.py`, the
 integration adapters' actual API-calling code in `integrations/*.py`,
-the current Streamlit UI, the Docker foundation. Phase 1 adds: do not
-wire `core/identity/` into `core/auth.py` or any UI login form without
-that being its own explicit, discussed phase. Phase 4 adds: do not
-enable any `LEADLENS_V2_READ_<ENTITY>` flag in code (they must only be
-set via deployment environment/secrets, per
-`docs/V2_PHASE4_READ_CUTOVER.md`'s runbook), and do not turn off Phase
-3's legacy-authoritative write path — Phase 4 changes only which store
-answers a *read*. Phase 5 adds: do not enable
-`LEADLENS_V2_TENANT_CONTEXT_ENABLED` in code (deployment
+the current Streamlit UI, the Docker foundation. Phase 1's original
+"do not wire `core/identity/` into `core/auth.py`" restriction was
+lifted by Phase 7, which was itself the explicit, discussed phase that
+warning anticipated — done behind `LEADLENS_V2_AUTH_ENABLED`, legacy
+path fully preserved. Phase 4 adds: do not enable any
+`LEADLENS_V2_READ_<ENTITY>` flag in code (they must only be set via
+deployment environment/secrets, per `docs/V2_PHASE4_READ_CUTOVER.md`'s
+runbook), and do not turn off Phase 3's legacy-authoritative write path
+— Phase 4 changes only which store answers a *read*. Phase 5 adds: do
+not enable `LEADLENS_V2_TENANT_CONTEXT_ENABLED` in code (deployment
 environment/secrets only), do not build a live organization switcher or
 enforce new RBAC broadly in the UI. Phase 6 adds: do not enable
 `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` in code (deployment
@@ -251,7 +319,13 @@ environment/secrets only), do not run
 `scripts/migrate_integration_credentials.py` automatically or on
 startup, do not move `OPENAI_API_KEY`/LLM credentials into per-organization
 storage, and do not build per-clinic OAuth consent flows or multi-account-
-per-provider support — none of that is started.
+per-provider support — none of that is started. Phase 7 adds: do not
+enable `LEADLENS_V2_AUTH_ENABLED` in code (deployment
+environment/secrets only), do not build password-reset/email flows,
+SSO, social login, a full SaaS organization switcher, or an invitation-
+email system — none of that is started; do not remove the legacy
+shared-password path from `core/auth.py` — it remains the rollback
+target for as long as any deployment might need it.
 
 ## Automation roadmap
 

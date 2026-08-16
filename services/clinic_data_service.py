@@ -29,6 +29,38 @@ ENTITY_META = {
     "corporate_clients": ("clinic_corporate_clients", "client_id", "C"),
 }
 
+# Phase 7 RBAC: which Phase 1 permission (core/identity/permissions.py)
+# a mutation of each entity requires. Product-judgment mapping onto
+# Phase 1's coarser SaaS-role taxonomy, which has no per-CRM-entity
+# permission of its own — documented in docs/V2_PHASE7_AUTH_CUTOVER.md:
+# packages/package_templates/progress_notes are treatment-plan data
+# (treatments.manage); therapists is the staff roster used for
+# scheduling, closest to appointments.manage since Phase 1 has no
+# dedicated staff-management permission; corporate_clients is business
+# development, grouped with leads.manage. See
+# services/authorization_guard.py — this is a no-op unless V2 auth is
+# enabled and a live session exists (legacy deployments and scripts are
+# unaffected).
+ENTITY_MANAGE_PERMISSION = {
+    "patients": "patients.manage",
+    "appointments": "appointments.manage",
+    "packages": "treatments.manage",
+    "package_templates": "treatments.manage",
+    "payments": "payments.manage",
+    "therapists": "appointments.manage",
+    "progress_notes": "treatments.manage",
+    "leads": "leads.manage",
+    "corporate_clients": "leads.manage",
+}
+
+
+def _require_manage_permission(entity: str) -> None:
+    from services.authorization_guard import require_permission
+
+    permission = ENTITY_MANAGE_PERMISSION.get(entity)
+    if permission:
+        require_permission(permission)
+
 PATIENT_STATUSES = {"Active", "Inactive", "Renewal Due", "Archived"}
 PACKAGE_TEMPLATE_STATUSES = {"Active", "Archived"}
 APPOINTMENT_STATUSES = {
@@ -408,6 +440,7 @@ def _validate_record(
 
 
 def add_record(entity: str, data: dict[str, Any]) -> dict[str, Any]:
+    _require_manage_permission(entity)
     rows = _read_rows(entity)
     _, id_field, _ = ENTITY_META[entity]
     row = _validate_record(entity, data)
@@ -441,6 +474,7 @@ def update_record(
     record_id: str,
     updates: dict[str, Any],
 ) -> dict[str, Any]:
+    _require_manage_permission(entity)
     rows = _read_rows(entity)
     _, id_field, _ = ENTITY_META[entity]
     safe_updates = dict(updates)

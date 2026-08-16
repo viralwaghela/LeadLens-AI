@@ -199,12 +199,14 @@ def dynamic_chief_of_staff_answer(
     clean_query = str(query or "").strip()
     if not clean_query:
         return "Please ask a business question so I can review the evidence."
+    from services.authorization_guard import current_permissions
     from services.specialist_orchestration import coordinate_specialists
 
     return str(
         coordinate_specialists(
             clean_query,
             conversation_history=conversation_history,
+            permissions=current_permissions(),
         )["message"]
     )
 

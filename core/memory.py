@@ -759,6 +759,14 @@ def load_company():
 
 
 def save_company(company_data):
+    """Low-level, intentionally ungated storage primitive — no RBAC check
+    of its own. Phase 7.1.1: the live human path (onboarding.py) no
+    longer calls this directly; it goes through
+    services.platform_data.save_company_profile() instead, which enforces
+    organization.manage when V2 auth is enabled. This function still
+    exists for bootstrap/system callers (scripts, migrations) that run
+    outside any authenticated Streamlit session — do not call this from
+    new UI code without going through save_company_profile()."""
     def mutate(memory):
         memory["company"] = company_data
     update_memory(mutate)

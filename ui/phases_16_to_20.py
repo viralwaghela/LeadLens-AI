@@ -16,7 +16,11 @@ def show_outcome_learning():
   if st.form_submit_button("Record measured outcome"): record_outcome(rec,action,contacts,conv,rev,notes); audit_event("local-owner","record_outcome","campaign",rec); st.success("Outcome saved to Jarvis memory."); st.rerun()
  if s["rows"]: st.dataframe(s["rows"],use_container_width=True)
 def show_security_center():
- st.markdown('<div class="eyebrow">PHASE 19 · SECURITY & ACCOUNTS</div>',unsafe_allow_html=True); st.title("Security & Account Foundation"); st.warning("Local role-and-audit foundation, not production authentication."); role=st.selectbox("Test role",list(ROLE_PERMISSIONS)); st.write("Permissions:"); [st.write(f"- {p}") for p in sorted(ROLE_PERMISSIONS[role])]; sample=st.text_input("Test masking","9876543210"); st.code(mask_sensitive(sample)); st.subheader("Audit log"); st.dataframe(audit_rows()[-100:],use_container_width=True)
+ st.markdown('<div class="eyebrow">PHASE 19 · SECURITY & ACCOUNTS</div>',unsafe_allow_html=True); st.title("Security & Account Foundation"); st.warning("Local role-and-audit foundation, not production authentication."); role=st.selectbox("Test role",list(ROLE_PERMISSIONS)); st.write("Permissions:"); [st.write(f"- {p}") for p in sorted(ROLE_PERMISSIONS[role])]; sample=st.text_input("Test masking","9876543210"); st.code(mask_sensitive(sample)); st.subheader("Audit log")
+ try:
+  st.dataframe(audit_rows()[-100:],use_container_width=True)
+ except Exception:
+  st.info("You do not have permission to view the audit log.")
 def show_deployment_center():
  st.markdown('<div class="eyebrow">PHASE 20 · DEPLOYMENT & PILOT</div>',unsafe_allow_html=True); st.title("Deployment & Pilot Center"); checks={"Application starts locally":True,"Pilot CRM exists":True,"Approval-first workflows exist":True,"Outcome measurement exists":True,"Role and audit foundation exists":True,"Google Calendar connected":False,"Gmail connected":False,"WhatsApp Business connected":False,"Production authentication enabled":False,"Production database configured":False}
  for label,done in checks.items(): st.checkbox(label,value=done,disabled=True)

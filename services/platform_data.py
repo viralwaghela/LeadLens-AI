@@ -77,6 +77,10 @@ def add_decision(title: str, reason: str, impact: str) -> None:
 
 
 def save_company_profile(profile: dict[str, Any]) -> None:
+    from services.authorization_guard import require_permission
+
+    require_permission("organization.manage")
+
     def mutate(memory):
         memory["company"] = profile
     update_memory(mutate)

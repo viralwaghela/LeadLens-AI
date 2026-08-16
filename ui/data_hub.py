@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import streamlit as st
+from services.authorization_guard import PermissionDenied
 from services.platform_data import business_snapshot, preview_uploaded_file, save_company_profile, save_uploaded_file
 
 
@@ -37,9 +38,13 @@ def show_data_hub() -> None:
             profile["target_audience"] = st.text_area("Target audience", value=str(company.get("target_audience", "")), height=100)
             profile["goals"] = st.text_area("Current business goals", value=str(company.get("goals", "")), height=100)
             if st.form_submit_button("Save business memory", type="primary"):
-                save_company_profile(profile)
-                st.success("Business memory updated for every agent.")
-                st.rerun()
+                try:
+                    save_company_profile(profile)
+                except PermissionDenied:
+                    st.error("You don't have permission to update the business profile.")
+                else:
+                    st.success("Business memory updated for every agent.")
+                    st.rerun()
     with tab2:
         upload = st.file_uploader("Add business data", type=["csv", "json", "txt", "md", "xlsx"])
         if upload is not None:

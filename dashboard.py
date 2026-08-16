@@ -3,8 +3,9 @@ from __future__ import annotations
 import streamlit as st
 
 from core.memory import load_company
-from core.auth import ROLE_CRM_ONLY, current_role, render_logout_control
+from core.auth import ROLE_CRM_ONLY, current_role, render_logout_control, v2_auth_enabled
 from ui.action_center import show_action_center
+from ui.member_management import show_member_management
 from ui.business_jarvis_suite import (
     show_agent_council,
     show_execution_center,
@@ -159,7 +160,18 @@ def show_dashboard() -> None:
         # the workspace back to the CRM default.
         queried = st.query_params.get("workspace", "").upper()
         st.session_state["workspace_mode"] = queried if queried in ("CRM", "JARVIS") else "JARVIS"
-    is_crm_only_role = current_role() == ROLE_CRM_ONLY
+    v2_session = None
+    if v2_auth_enabled():
+        from core.auth import current_authenticated_session
+
+        v2_session = current_authenticated_session()
+        # V2-mode equivalent of the legacy ROLE_CRM_ONLY distinction:
+        # no jarvis.use permission means no JARVIS workspace access,
+        # role-name-independent (matches Phase 1's actual permission
+        # matrix rather than reintroducing a second role concept).
+        is_crm_only_role = v2_session is not None and "jarvis.use" not in v2_session.permissions
+    else:
+        is_crm_only_role = current_role() == ROLE_CRM_ONLY
     if is_crm_only_role:
         # Enforced here, not just by hiding the Core switch below — a
         # receptionist-role session can never resolve to JARVIS mode
@@ -187,6 +199,8 @@ def show_dashboard() -> None:
                 "Clinic Team",
                 "Settings",
             ]
+            if v2_session is not None and "members.view" in v2_session.permissions:
+                pages.append("Organization Members")
             page = st.radio(
                 "Clinic records",
                 pages,
@@ -235,6 +249,7 @@ def show_dashboard() -> None:
             "Payments": show_payments_page,
             "Clinic Team": show_team_page,
             "Settings": _crm_settings,
+            "Organization Members": show_member_management,
         }
     else:
         routes = {

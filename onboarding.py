@@ -2,7 +2,15 @@
 
 Runs only once per business — app.py falls back here whenever
 core.memory.company_exists() is False, and stops routing here again the
-moment save_company() succeeds. This screen deliberately does NOT share
+moment save_company_profile() succeeds. Phase 7.1.1: this now calls
+services.platform_data.save_company_profile() (the same gated path
+"Settings > Clinic details" uses) rather than core.memory.save_company()
+directly, so the same organization.manage check applies here — app.py
+runs require_login() before this ever renders, so when V2 auth is
+enabled, only an already-authenticated identity with organization.manage
+can complete first-run setup; when V2 auth is disabled, the check is a
+no-op and this behaves exactly as before. This screen deliberately does
+NOT share
 CSS with dashboard.py's apply_workspace_theme(): that function also drives
 the Core switch's forced-theme-reload machinery (see ui/workspace_theme.py),
 which depends on a `workspace` mode that doesn't exist yet at this point in
@@ -16,7 +24,8 @@ import time
 
 import streamlit as st
 
-from core.memory import save_company
+from services.authorization_guard import PermissionDenied
+from services.platform_data import save_company_profile
 from ui.icons import icon
 
 STEP_WELCOME = 0
@@ -235,16 +244,23 @@ def _step_tour() -> None:
     with center:
         if st.button("Show me my dashboard", use_container_width=True, type="primary"):
             answers = st.session_state.get("onboarding_answers", {})
-            save_company(
-                {
-                    "owner_name": answers.get("owner_name", ""),
-                    "business_name": answers.get("business_name", ""),
-                    "industry": "Healthcare",
-                    "employees": answers.get("employees", 0),
-                    "services": answers.get("services", ""),
-                    "clinic_timings": answers.get("clinic_timings", ""),
-                }
-            )
+            try:
+                save_company_profile(
+                    {
+                        "owner_name": answers.get("owner_name", ""),
+                        "business_name": answers.get("business_name", ""),
+                        "industry": "Healthcare",
+                        "employees": answers.get("employees", 0),
+                        "services": answers.get("services", ""),
+                        "clinic_timings": answers.get("clinic_timings", ""),
+                    }
+                )
+            except PermissionDenied:
+                st.error(
+                    "You don't have permission to set up this clinic's profile. "
+                    "Ask an owner or admin to complete first-time setup."
+                )
+                return
             st.session_state.pop("onboarding_answers", None)
             st.session_state.pop("onboarding_step", None)
             st.session_state["show_onboarding_complete_toast"] = True

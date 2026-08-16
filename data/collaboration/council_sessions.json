@@ -133,5 +133,177 @@
       "management_rule": "One owner, one approval, one measurable outcome and one review date.",
       "learning_used": true
     }
+  },
+  {
+    "id": "COUNCIL-353A76041B",
+    "question": "What should we prioritise?",
+    "created_at": "2026-08-16T17:14:00",
+    "agents": [
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing should prioritise measurable bookings and retention.",
+        "recommendation": "Use the highest-converting measured channel and stop campaigns without booked-patient attribution.",
+        "risk": "Spending may rise without verified revenue."
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "No critical capacity pressure is recorded.",
+        "recommendation": "Confirm available slots before increasing demand and protect therapist workload.",
+        "risk": "Growth without capacity can increase cancellations and poor service."
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Estimated operating margin is 0.0%.",
+        "recommendation": "Prioritise actions with measured net revenue and avoid fixed costs until demand is proven.",
+        "risk": "Revenue growth can hide weak cash contribution."
+      },
+      {
+        "agent": "Customer Success Agent",
+        "finding": "Retention remains the lowest-cost growth route.",
+        "recommendation": "Contact consented inactive and renewal-due patients using approval-first workflows.",
+        "risk": "Delayed follow-up allows preventable churn."
+      },
+      {
+        "agent": "Sales Agent",
+        "finding": "Corporate outreach needs a repeatable pipeline.",
+        "recommendation": "Use a standard offer, owner, next action and follow-up date for every lead.",
+        "risk": "Unowned leads may become stale."
+      }
+    ],
+    "synthesis": {
+      "decision": "Reuse the strongest measured pattern: patient recovery (100.0% success rate over 1 runs, Low confidence).",
+      "supporting_actions": [],
+      "management_rule": "One owner, one approval, one measurable outcome and one review date.",
+      "learning_used": true
+    }
+  },
+  {
+    "id": "COUNCIL-99308246E0",
+    "question": "What should we prioritise?",
+    "created_at": "2026-08-16T17:21:01",
+    "agents": [
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing should prioritise measurable bookings and retention.",
+        "recommendation": "Use the highest-converting measured channel and stop campaigns without booked-patient attribution.",
+        "risk": "Spending may rise without verified revenue."
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "No critical capacity pressure is recorded.",
+        "recommendation": "Confirm available slots before increasing demand and protect therapist workload.",
+        "risk": "Growth without capacity can increase cancellations and poor service."
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Estimated operating margin is 0.0%.",
+        "recommendation": "Prioritise actions with measured net revenue and avoid fixed costs until demand is proven.",
+        "risk": "Revenue growth can hide weak cash contribution."
+      },
+      {
+        "agent": "Customer Success Agent",
+        "finding": "Retention remains the lowest-cost growth route.",
+        "recommendation": "Contact consented inactive and renewal-due patients using approval-first workflows.",
+        "risk": "Delayed follow-up allows preventable churn."
+      },
+      {
+        "agent": "Sales Agent",
+        "finding": "Corporate outreach needs a repeatable pipeline.",
+        "recommendation": "Use a standard offer, owner, next action and follow-up date for every lead.",
+        "risk": "Unowned leads may become stale."
+      }
+    ],
+    "synthesis": {
+      "decision": "Reuse the strongest measured pattern: patient recovery (100.0% success rate over 1 runs, Low confidence).",
+      "supporting_actions": [],
+      "management_rule": "One owner, one approval, one measurable outcome and one review date.",
+      "learning_used": true
+    }
+  },
+  {
+    "id": "COUNCIL-E6DD755993",
+    "question": "What should we prioritise?",
+    "created_at": "2026-08-16T17:28:30",
+    "agents": [
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing should prioritise measurable bookings and retention.",
+        "recommendation": "Use the highest-converting measured channel and stop campaigns without booked-patient attribution.",
+        "risk": "Spending may rise without verified revenue."
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "No critical capacity pressure is recorded.",
+        "recommendation": "Confirm available slots before increasing demand and protect therapist workload.",
+        "risk": "Growth without capacity can increase cancellations and poor service."
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Estimated operating margin is 0.0%.",
+        "recommendation": "Prioritise actions with measured net revenue and avoid fixed costs until demand is proven.",
+        "risk": "Revenue growth can hide weak cash contribution."
+      },
+      {
+        "agent": "Customer Success Agent",
+        "finding": "Retention remains the lowest-cost growth route.",
+        "recommendation": "Contact consented inactive and renewal-due patients using approval-first workflows.",
+        "risk": "Delayed follow-up allows preventable churn."
+      },
+      {
+        "agent": "Sales Agent",
+        "finding": "Corporate outreach needs a repeatable pipeline.",
+        "recommendation": "Use a standard offer, owner, next action and follow-up date for every lead.",
+        "risk": "Unowned leads may become stale."
+      }
+    ],
+    "synthesis": {
+      "decision": "Reuse the strongest measured pattern: patient recovery (100.0% success rate over 1 runs, Low confidence).",
+      "supporting_actions": [],
+      "management_rule": "One owner, one approval, one measurable outcome and one review date.",
+      "learning_used": true
+    }
+  },
+  {
+    "id": "COUNCIL-FF7A2D3299",
+    "question": "What should we prioritise?",
+    "created_at": "2026-08-16T18:45:22",
+    "agents": [
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing should prioritise measurable bookings and retention.",
+        "recommendation": "Use the highest-converting measured channel and stop campaigns without booked-patient attribution.",
+        "risk": "Spending may rise without verified revenue."
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "No critical capacity pressure is recorded.",
+        "recommendation": "Confirm available slots before increasing demand and protect therapist workload.",
+        "risk": "Growth without capacity can increase cancellations and poor service."
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Estimated operating margin is 0.0%.",
+        "recommendation": "Prioritise actions with measured net revenue and avoid fixed costs until demand is proven.",
+        "risk": "Revenue growth can hide weak cash contribution."
+      },
+      {
+        "agent": "Customer Success Agent",
+        "finding": "Retention remains the lowest-cost growth route.",
+        "recommendation": "Contact consented inactive and renewal-due patients using approval-first workflows.",
+        "risk": "Delayed follow-up allows preventable churn."
+      },
+      {
+        "agent": "Sales Agent",
+        "finding": "Corporate outreach needs a repeatable pipeline.",
+        "recommendation": "Use a standard offer, owner, next action and follow-up date for every lead.",
+        "risk": "Unowned leads may become stale."
+      }
+    ],
+    "synthesis": {
+      "decision": "Reuse the strongest measured pattern: patient recovery (100.0% success rate over 1 runs, Low confidence).",
+      "supporting_actions": [],
+      "management_rule": "One owner, one approval, one measurable outcome and one review date.",
+      "learning_used": true
+    }
   }
 ]

@@ -386,7 +386,12 @@ def show_jarvis_mode():
     if asked and prompt:
         st.session_state["jarvis_messages"].append({"role": "user", "content": prompt})
         with st.spinner("Coordinating the AI team..."):
-            result = coordinate_specialists(prompt, conversation_history=st.session_state["jarvis_messages"][:-1])
+            from services.authorization_guard import current_permissions
+
+            result = coordinate_specialists(
+                prompt, conversation_history=st.session_state["jarvis_messages"][:-1],
+                permissions=current_permissions(),
+            )
             answer = str(result.get("message", "No answer was generated."))
             trace = result.get("trace", {})
         st.session_state["jarvis_messages"].append({"role": "assistant", "content": answer})

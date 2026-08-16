@@ -14,6 +14,15 @@ def audit_event(actor,action,entity,detail=""):
         pass
 
 def audit_rows():
+    """Phase 7.1: gated by audit.view — this is the only live caller
+    (ui/phases_16_to_20.py's show_security_center(), the "Settings ->
+    Data protection" tab); nothing internal/system-side reads it, so
+    gating this one function closes the boundary at its source rather
+    than only at the UI layer. A no-op (always allows) when V2 auth is
+    off or no live session exists — see services/authorization_guard.py."""
+    from services.authorization_guard import require_permission
+
+    require_permission("audit.view")
     return [
         {"timestamp": row.get("created_at", ""), **row.get("data", {})}
         for row in get_memory_section("security_audit_log")

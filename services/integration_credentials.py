@@ -199,6 +199,9 @@ def configure_integration(
         stays DISABLED, ERROR stays ERROR) — a config-only update never
         silently reactivates a disabled integration or clears an error
         it didn't actually fix."""
+    from services.authorization_guard import require_permission
+
+    require_permission("integrations.manage")
     row = get_integration(session, tenant_context.organization_id, provider)
     if row is None:
         row = OrganizationIntegration(
@@ -242,6 +245,9 @@ def configure_integration(
 def disable_integration(
     session: Session, tenant_context: TenantContext, provider: IntegrationProvider, *, actor: str = "system",
 ) -> OrganizationIntegration | None:
+    from services.authorization_guard import require_permission
+
+    require_permission("integrations.manage")
     row = get_integration(session, tenant_context.organization_id, provider)
     if row is None:
         return None

@@ -148,10 +148,12 @@ def consult_specialist(
     agent: str,
     question: str,
     context: dict[str, Any],
+    *,
+    permissions: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     spec = AGENT_SPECS[agent]
     tool_results = {
-        tool_name: run_read_only_tool(tool_name, context)
+        tool_name: run_read_only_tool(tool_name, context, permissions=permissions)
         for tool_name in spec["tools"]
     }
     prompt = f"""
@@ -188,10 +190,25 @@ SCOPED READ-ONLY EVIDENCE
     }
 
 
+# Phase 7 RBAC: specialists whose entire focus is permission-gated —
+# gated at specialist-selection time (in addition to
+# jarvis_tools.run_read_only_tool()'s field/tool-level redaction, which
+# still applies to every OTHER specialist that happens to touch the same
+# underlying tool, e.g. "sales" also calls revenue_summary).
+_SPECIALIST_PERMISSION = {"finance": "jarvis.finance", "marketing": "jarvis.marketing"}
+
+
 def coordinate_specialists(
     question: str,
     conversation_history: list[dict[str, Any]] | None = None,
+    *,
+    permissions: frozenset[str] | None = None,
 ) -> dict[str, Any]:
+    """`permissions`, when given (Phase 7 — RBAC is active), gates which
+    specialists may be consulted and redacts finance-sensitive tool
+    output regardless of which specialist requested it (see
+    services/jarvis_tools.py). `permissions=None` (the default)
+    reproduces exactly the pre-Phase-7 behavior."""
     clean_question = str(question or "").strip()
     if not clean_question:
         return {
@@ -201,11 +218,24 @@ def coordinate_specialists(
             "consultations": [],
             "trace": {},
         }
+    if permissions is not None and "jarvis.use" not in permissions:
+        return {
+            "success": False,
+            "message": "Your account does not have access to Jarvis.",
+            "agents": [],
+            "consultations": [],
+            "trace": {},
+        }
 
     context = build_jarvis_context(clean_question)
     selected = determine_agents(clean_question)
+    if permissions is not None:
+        selected = [
+            agent for agent in selected
+            if _SPECIALIST_PERMISSION.get(agent, "jarvis.use") in permissions
+        ]
     consultations = [
-        consult_specialist(agent, clean_question, context)
+        consult_specialist(agent, clean_question, context, permissions=permissions)
         for agent in selected
     ]
     safe_history = [
