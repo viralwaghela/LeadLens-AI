@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from email.message import EmailMessage
 from pathlib import Path
@@ -15,14 +16,37 @@ class GmailService:
     In local pilots without credentials the adapter runs in dry-run mode.
     """
 
-    def __init__(self, dry_run: bool | None = None) -> None:
-        self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
-        self.delegated_user = os.getenv("GMAIL_DELEGATED_USER", "").strip()
-        configured = bool(self.credentials_path and Path(self.credentials_path).exists() and self.delegated_user)
+    def __init__(self, dry_run: bool | None = None, *, credentials: dict[str, Any] | None = None) -> None:
+        """`credentials`, when given (Phase 6 — see
+        services/integration_clients.py), supplies a per-organization
+        {"service_account_json" or "service_account_file", "delegated_user"}
+        instead of this reading deployment-wide environment variables.
+        Omitting it reproduces exactly the pre-Phase-6 behavior."""
+        source = credentials or {}
+        self.credentials_json = str(source.get("service_account_json") or "").strip()
+        self.credentials_path = str(source.get("service_account_file") or "").strip() or (
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() if not self.credentials_json else ""
+        )
+        self.delegated_user = str(source.get("delegated_user") or os.getenv("GMAIL_DELEGATED_USER", "")).strip()
+        has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
+        configured = bool(has_credential_source and self.delegated_user)
         self.dry_run = (not configured) if dry_run is None else dry_run
 
+    def _service_account_credentials(self, scopes: list[str]):
+        from google.oauth2 import service_account
+
+        if self.credentials_json:
+            info = json.loads(self.credentials_json)
+            return service_account.Credentials.from_service_account_info(
+                info, scopes=scopes, subject=self.delegated_user,
+            )
+        return service_account.Credentials.from_service_account_file(
+            self.credentials_path, scopes=scopes, subject=self.delegated_user,
+        )
+
     def status(self) -> dict[str, Any]:
-        return {"provider": "Gmail", "configured": bool(self.credentials_path and Path(self.credentials_path).exists() and self.delegated_user), "mode": "dry-run" if self.dry_run else "live", "delegated_user": self.delegated_user}
+        has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
+        return {"provider": "Gmail", "configured": bool(has_credential_source and self.delegated_user), "mode": "dry-run" if self.dry_run else "live", "delegated_user": self.delegated_user}
 
     @staticmethod
     def _raw_message(payload: dict[str, Any]) -> str:
@@ -50,13 +74,10 @@ class GmailService:
 
     def _execute(self, mode: str, payload: dict[str, Any]) -> IntegrationResult:
         try:
-            from google.oauth2 import service_account
             from googleapiclient.discovery import build
 
-            credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=["https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/gmail.send"],
-                subject=self.delegated_user,
+            credentials = self._service_account_credentials(
+                ["https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/gmail.send"],
             )
             service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
             raw = {"raw": self._raw_message(payload)}

@@ -15,16 +15,35 @@ class GoogleCalendarService:
     calendar. The calendar must be shared with the service-account email.
     """
 
-    def __init__(self, dry_run: bool | None = None) -> None:
-        self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
-        self.calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "primary").strip() or "primary"
-        configured = bool(self.credentials_path and Path(self.credentials_path).exists())
+    def __init__(self, dry_run: bool | None = None, *, credentials: dict[str, Any] | None = None) -> None:
+        """`credentials`, when given (Phase 6 — see
+        services/integration_clients.py), supplies a per-organization
+        {"service_account_json" or "service_account_file", "calendar_id"}
+        instead of this reading deployment-wide environment variables.
+        Omitting it reproduces exactly the pre-Phase-6 behavior."""
+        source = credentials or {}
+        self.credentials_json = str(source.get("service_account_json") or "").strip()
+        self.credentials_path = str(source.get("service_account_file") or "").strip() or (
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip() if not self.credentials_json else ""
+        )
+        self.calendar_id = str(source.get("calendar_id") or os.getenv("GOOGLE_CALENDAR_ID", "primary")).strip() or "primary"
+        has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
+        configured = has_credential_source
         self.dry_run = (not configured) if dry_run is None else dry_run
 
+    def _service_account_credentials(self, scopes: list[str]):
+        from google.oauth2 import service_account
+
+        if self.credentials_json:
+            info = json.loads(self.credentials_json)
+            return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        return service_account.Credentials.from_service_account_file(self.credentials_path, scopes=scopes)
+
     def status(self) -> dict[str, Any]:
+        has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
         return {
             "provider": "Google Calendar",
-            "configured": bool(self.credentials_path and Path(self.credentials_path).exists()),
+            "configured": has_credential_source,
             "mode": "dry-run" if self.dry_run else "live",
             "calendar_id": self.calendar_id,
         }
@@ -49,13 +68,9 @@ class GoogleCalendarService:
             return IntegrationResult("calendar", "create_event", True, "simulated", detail="Calendar event validated; no external event created.", payload=event)
 
         try:
-            from google.oauth2 import service_account
             from googleapiclient.discovery import build
 
-            credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=["https://www.googleapis.com/auth/calendar"],
-            )
+            credentials = self._service_account_credentials(["https://www.googleapis.com/auth/calendar"])
             service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
             created = service.events().insert(calendarId=self.calendar_id, body=event, sendUpdates="all").execute()
             return IntegrationResult("calendar", "create_event", True, "sent", external_id=created.get("id", ""), detail=created.get("htmlLink", ""), payload=event)

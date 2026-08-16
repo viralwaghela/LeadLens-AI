@@ -24,6 +24,31 @@ from integrations.whatsapp_service import WhatsAppBusinessService
 from services.clinic_data_service import get_record
 
 
+def _whatsapp_client() -> WhatsAppBusinessService:
+    """Phase 6: resolve the same trusted transitional TenantContext every
+    other Phase 5 hook point uses, so a booking confirmation/reminder
+    uses this organization's WhatsApp credentials rather than always
+    reading os.environ. Falls back to the plain (env-reading)
+    constructor on any resolution failure — a DB hiccup must never
+    block a transactional patient message, matching every other
+    Phase 5/6 "shadow resolution never blocks the legacy operation"
+    hook point."""
+    try:
+        from core.db.session import session_scope
+        from core.identity.tenant_context import build_transitional_context
+        from services.integration_clients import get_whatsapp_client
+        from services.integration_credentials import _get_engine
+
+        # Same shared-engine reasoning as
+        # services/integration_manager_v21.py's _current_tenant_context().
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            context = build_transitional_context(session)
+        return get_whatsapp_client(context)
+    except Exception:  # noqa: BLE001 - must never block a transactional send
+        return WhatsAppBusinessService()
+
+
 def _clinic_name() -> str:
     return load_company().get("business_name") or "the clinic"
 
@@ -55,7 +80,7 @@ def _patient_for_appointment(appointment: dict[str, Any]) -> dict[str, Any] | No
 
 
 def _send(phone: str, body: str, log_summary: str) -> dict[str, Any]:
-    result = WhatsAppBusinessService().send_text({"to": phone, "body": body})
+    result = _whatsapp_client().send_text({"to": phone, "body": body})
     mode = "simulated" if result.status == "simulated" else result.status
     _log(f"{log_summary} ({mode})", "Completed" if result.success else "Failed")
     return {

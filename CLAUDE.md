@@ -64,23 +64,29 @@ feature in its own right.
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
    it first, since it's a significant architectural decision. **V2 Phase
-   0 through 5 have been built** (a relational schema, an identity/
+   0 through 6 have been built** (a relational schema, an identity/
    authorization backend on top of it, Jarvis's learning-memory storage
    now genuinely running through this schema, CRM writes shadow-writing
    into the relational schema, CRM *reads* that can be routed to the
    relational schema too, entity-by-entity, behind flags that all
-   currently default OFF, and — Phase 5 — a `TenantContext` abstraction
-   plus tenant-scoped shadow copies of approvals, the execution queue,
-   audit events, and the scheduler ledger, all behind
-   `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**) — see "V2
-   migration" below) but Jarvis, the scheduler, approvals, integrations,
-   and `core/auth.py`'s shared-password login are all still exclusively
-   legacy and single-tenant in live operation, and CRM reads remain
-   legacy in every live deployment until an operator explicitly opts an
-   entity in; none of these phases change the multi-tenant gap itself —
-   there is still no live tenant-routing cutover, no organization
-   switcher, and no live RBAC enforcement — they only lay groundwork for
-   the phase that eventually will.
+   currently default OFF, a `TenantContext` abstraction plus
+   tenant-scoped shadow copies of approvals, the execution queue, audit
+   events, and the scheduler ledger, all behind
+   `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**), and — Phase
+   6 — encrypted, organization-scoped WhatsApp/Gmail/Calendar
+   credentials with a transitional environment-variable fallback, behind
+   `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**) — see
+   "V2 migration" below) but Jarvis, the scheduler, approvals, and
+   `core/auth.py`'s shared-password login are all still exclusively
+   legacy and single-tenant in live operation, CRM reads remain legacy
+   in every live deployment until an operator explicitly opts an entity
+   in, and every integration adapter still reads its deployment-wide
+   environment credentials directly until an operator explicitly
+   migrates an organization's credentials into the database; none of
+   these phases change the multi-tenant gap itself — there is still no
+   live tenant-routing cutover, no organization switcher, and no live
+   RBAC enforcement — they only lay groundwork for the phase that
+   eventually will.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -108,7 +114,7 @@ feature in its own right.
   `services/learning_memory_v22.py` and
   `services/agent_collaboration_v23.py`).
 
-## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`, `services/crm_read_router.py`, `services/tenant_operational_sync.py`)
+## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`, `services/crm_read_router.py`, `services/tenant_operational_sync.py`, `services/integration_credentials.py`, `services/credential_encryption.py`, `integrations/*.py`)
 
 LeadLens V2 is an incremental brownfield migration, not a rewrite.
 **The legacy `core/memory.py` path remains the production source of
@@ -157,22 +163,55 @@ organization end-to-end via the existing Phase 2/4 mechanisms, so they
 needed no code changes. See `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md`
 for the full tenant-flow audit, the Jarvis call-graph proof, and the
 adversarial two-organization test suite
-(`tests/test_phase5_tenant_context.py`). Every other live file —
-`app.py`, `dashboard.py`, `core/auth.py`, the scheduler's check
-functions themselves, the approval/execution engine's actual logic, the
-integrations — is still completely untouched. **Do not wire multi-tenant
-organization switching or authentication into a live path without that
-being its own explicit, discussed phase** — see `docs/V2_COEXISTENCE.md`
-for Phase 0's architecture, `docs/V2_PHASE1_IDENTITY.md` for Phase 1's
-(including the full role → permission matrix),
-`docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's,
+(`tests/test_phase5_tenant_context.py`). **Phase 6 added
+`core/db/models/integration.py`'s `OrganizationIntegration`** (one
+provider-neutral, organization-scoped row per WhatsApp/Gmail/Calendar
+integration; secret fields Fernet-encrypted via
+`services/credential_encryption.py` under a platform-level
+`LEADLENS_CREDENTIAL_ENCRYPTION_KEY`, never stored in the DB) **and
+`services/integration_credentials.py`** (the only module that
+reads/writes that table — `configure_integration()`/
+`disable_integration()`/`resolve_credentials()`, none of which accept a
+caller-supplied organization id). `integrations/whatsapp_service.py`,
+`gmail_service.py`, and `calendar_service.py` each gained one optional
+`credentials` constructor parameter (their actual API-calling logic is
+untouched); `services/integration_clients.py` is the factory layer that
+turns a `TenantContext` into a configured adapter instance, used by
+`services/integration_manager_v21.py` (the approval-gated queue) and
+`services/appointment_messaging.py` (pre-authorized booking
+confirmations/reminders) — both resolve the same transitional
+`TenantContext` Phase 5 already established. A transitional
+environment-variable fallback exists behind
+`LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**), and even
+when enabled it only ever applies to the one transitional/default
+organization — any other organization with an absent tenant credential
+gets nothing, never another organization's or the deployment's env
+credentials. `scripts/migrate_integration_credentials.py` (explicit,
+dry-run-capable, idempotent, never overwrites an existing tenant
+credential without `--force`, never prints a secret) and
+`scripts/verify_integration_credentials.py` (safe status report, never
+a secret value) support the migration. OpenAI/LLM credentials remain
+platform-scoped, deliberately not made tenant-specific. See
+`docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for the full audit,
+architecture, and adversarial test suite
+(`tests/test_phase6_integration_credentials.py`). Every other live
+file — `app.py`, `dashboard.py`, `core/auth.py`, the scheduler's check
+functions themselves, the approval/execution engine's actual decision
+logic, the adapters' API-calling logic — is still completely untouched.
+**Do not wire multi-tenant organization switching or authentication
+into a live path without that being its own explicit, discussed
+phase** — see `docs/V2_COEXISTENCE.md` for Phase 0's architecture,
+`docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the full role →
+permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for Phase 2's,
 `docs/V2_PHASE3_CRM_DUAL_WRITE.md` for Phase 3's (including the full
 CRM mutation-surface audit and the known `marketing-site/api/lead.py`
 bypass), `docs/V2_PHASE4_READ_CUTOVER.md` for Phase 4's (including the
 full CRM read-path audit and the entity-by-entity production activation
-runbook), and `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's.
-Every phase's rollback is the same shape — an env-var kill switch, no
-destructive DB changes needed.
+runbook), `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's, and
+`docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for Phase 6's (including the
+full integration credential audit and the provider-by-provider
+production migration procedure). Every phase's rollback is the same
+shape — an env-var kill switch, no destructive DB changes needed.
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
@@ -190,8 +229,13 @@ set via deployment environment/secrets, per
 answers a *read*. Phase 5 adds: do not enable
 `LEADLENS_V2_TENANT_CONTEXT_ENABLED` in code (deployment
 environment/secrets only), do not build a live organization switcher or
-enforce new RBAC broadly in the UI, and do not implement per-clinic
-integration credentials — that is Phase 6's, deliberately not started.
+enforce new RBAC broadly in the UI. Phase 6 adds: do not enable
+`LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` in code (deployment
+environment/secrets only), do not run
+`scripts/migrate_integration_credentials.py` automatically or on
+startup, do not move `OPENAI_API_KEY`/LLM credentials into per-organization
+storage, and do not build per-clinic OAuth consent flows or multi-account-
+per-provider support — none of that is started.
 
 ## Automation roadmap
 

@@ -23,6 +23,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -164,6 +165,15 @@ class ExecutionQueueItem(OrgScopedMixin, TimestampMixin, Base):
 
 class SecurityAuditEvent(OrgScopedMixin, Base):
     __tablename__ = "security_audit_events"
+    __table_args__ = (
+        # Phase 5 audit finding (docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md
+        # section 30-equivalent): no live query path reads this table yet
+        # (write-only shadow copy), but any future org-scoped audit query
+        # feature would otherwise force a full table scan. Added here as
+        # a small, safe, additive schema improvement — no query logic
+        # built against it in this phase.
+        Index("ix_security_audit_events_organization_id", "organization_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     actor: Mapped[str | None] = mapped_column(String(120))

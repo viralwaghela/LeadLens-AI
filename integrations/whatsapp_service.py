@@ -11,10 +11,18 @@ from integrations.base import IntegrationResult
 class WhatsAppBusinessService:
     """Meta WhatsApp Cloud API adapter with dry-run fallback."""
 
-    def __init__(self, dry_run: bool | None = None) -> None:
-        self.token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
-        self.phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
-        self.api_version = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip() or "v23.0"
+    def __init__(self, dry_run: bool | None = None, *, credentials: dict[str, Any] | None = None) -> None:
+        """`credentials`, when given (Phase 6 — see
+        services/integration_clients.py), supplies
+        {"access_token", "phone_number_id", "api_version"} resolved for a
+        specific organization instead of this reading the deployment-wide
+        environment variables directly. Omitting it reproduces exactly
+        the pre-Phase-6 behavior — every existing caller that constructs
+        this class with no arguments is unaffected."""
+        source = credentials or {}
+        self.token = str(source.get("access_token") or os.getenv("WHATSAPP_ACCESS_TOKEN", "")).strip()
+        self.phone_number_id = str(source.get("phone_number_id") or os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")).strip()
+        self.api_version = str(source.get("api_version") or os.getenv("WHATSAPP_API_VERSION", "v23.0")).strip() or "v23.0"
         configured = bool(self.token and self.phone_number_id)
         self.dry_run = (not configured) if dry_run is None else dry_run
 

@@ -25,6 +25,60 @@ from integrations.whatsapp_service import WhatsAppBusinessService
 from services.jarvis_memory import record_action_execution
 from services.security_service import audit_event
 
+
+def _current_tenant_context():
+    """Phase 6: resolve the same trusted transitional TenantContext every
+    other Phase 5 hook point uses, so integration credential resolution
+    is organization-scoped rather than reading os.environ directly.
+    Returns None on any failure (DB unavailable, etc.) — callers must
+    treat that exactly like "no tenant context available" and construct
+    adapters with no credentials override, which reproduces pre-Phase-6
+    behavior (adapter reads its own env vars) rather than breaking a
+    live approval/execution flow."""
+    try:
+        from core.db.session import session_scope
+        from core.identity.tenant_context import build_transitional_context
+        from services.integration_credentials import _get_engine
+
+        # Reuses the exact same (cached) engine services/integration_credentials.py
+        # resolves credentials against, rather than an independently
+        # constructed one — keeps org resolution and credential lookup
+        # pointed at the same database always (in production both read
+        # the same DATABASE_URL anyway; this also makes both resolvable
+        # through one single test monkeypatch point).
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            return build_transitional_context(session)
+    except Exception:  # noqa: BLE001 - must never break approval/execution
+        return None
+
+
+def _whatsapp_client() -> WhatsAppBusinessService:
+    context = _current_tenant_context()
+    if context is None:
+        return WhatsAppBusinessService()
+    from services.integration_clients import get_whatsapp_client
+
+    return get_whatsapp_client(context)
+
+
+def _gmail_client() -> GmailService:
+    context = _current_tenant_context()
+    if context is None:
+        return GmailService()
+    from services.integration_clients import get_gmail_client
+
+    return get_gmail_client(context)
+
+
+def _calendar_client() -> GoogleCalendarService:
+    context = _current_tenant_context()
+    if context is None:
+        return GoogleCalendarService()
+    from services.integration_clients import get_calendar_client
+
+    return get_calendar_client(context)
+
 ALLOWED_ACTIONS = {
     "calendar": {"create_event"},
     "gmail": {"create_draft", "send_email"},
@@ -104,9 +158,9 @@ def _fingerprint(
 
 def integration_statuses() -> list[dict[str, Any]]:
     return [
-        GoogleCalendarService().status(),
-        GmailService().status(),
-        WhatsAppBusinessService().status(),
+        _calendar_client().status(),
+        _gmail_client().status(),
+        _whatsapp_client().status(),
     ]
 
 
@@ -272,16 +326,16 @@ def execute_item(item_id: str) -> dict[str, Any]:
         item["payload"],
     )
     if provider == "calendar":
-        result = GoogleCalendarService().create_event(payload)
+        result = _calendar_client().create_event(payload)
     elif provider == "gmail":
-        service = GmailService()
+        service = _gmail_client()
         result = (
             service.create_draft(payload)
             if action == "create_draft"
             else service.send_email(payload)
         )
     else:
-        result = WhatsAppBusinessService().send_text(payload)
+        result = _whatsapp_client().send_text(payload)
 
     result_dict = result.to_dict()
     item["result"] = result_dict
