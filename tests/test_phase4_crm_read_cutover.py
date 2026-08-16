@@ -407,11 +407,26 @@ def test_same_external_id_isolated_across_organizations(isolated) -> None:
         assert rows_b[0]["name"] == "For B"
 
 
-def test_read_router_never_accepts_caller_supplied_organization_id() -> None:
+def test_read_router_organization_id_is_keyword_only_and_defaults_to_trusted_resolution() -> None:
+    """Phase 8 revision of this invariant: read_rows() now accepts an
+    explicit organization_id — a deliberate, reviewed capability for
+    trusted programmatic callers (scheduler per-organization enumeration,
+    tests, provisioning verification) that already know exactly which
+    already-authorized organization they're operating for. What must
+    still hold, and is asserted here: it is keyword-only (never
+    positionally slippable), defaults to None (omitting it always falls
+    back to resolve_live_organization_id()'s trusted, session-based
+    resolution — never an unset/zero organization), and the live,
+    human-facing UI call sites never pass user-controlled input into it
+    (verified separately in tests/test_phase8_saas_onboarding.py's
+    "no untrusted organization_id" sweep)."""
     import inspect
 
     sig = inspect.signature(router.read_rows)
-    assert "organization_id" not in sig.parameters and "org_id" not in sig.parameters
+    assert "organization_id" in sig.parameters
+    param = sig.parameters["organization_id"]
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert param.default is None
 
 
 # ---------------------------------------------------------------------------

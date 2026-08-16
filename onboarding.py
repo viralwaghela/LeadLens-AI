@@ -1,7 +1,10 @@
 """First-run experience: Jarvis introduces himself and sets up the clinic.
 
 Runs only once per business — app.py falls back here whenever
-core.memory.company_exists() is False, and stops routing here again the
+services.platform_data.company_setup_complete() is False (Phase 8:
+organization-scoped when LEADLENS_V2_ORG_SCOPED_SETTINGS_ENABLED is on
+and a live organization resolves, else the legacy global
+core.memory.company_exists()), and stops routing here again the
 moment save_company_profile() succeeds. Phase 7.1.1: this now calls
 services.platform_data.save_company_profile() (the same gated path
 "Settings > Clinic details" uses) rather than core.memory.save_company()

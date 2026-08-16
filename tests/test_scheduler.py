@@ -31,7 +31,7 @@ def run_tests() -> None:
             calls = []
 
             @scheduler.check
-            def sample_check():
+            def sample_check(context=None):
                 calls.append(1)
                 return scheduler.CheckResult(alerts_raised=1)
 
@@ -42,11 +42,11 @@ def run_tests() -> None:
 
             # --- a broken check must not take down the others -----------
             @scheduler.check
-            def broken_check():
+            def broken_check(context=None):
                 raise RuntimeError("boom")
 
             @scheduler.check
-            def other_check():
+            def other_check(context=None):
                 calls.append(2)
                 return scheduler.CheckResult()
 

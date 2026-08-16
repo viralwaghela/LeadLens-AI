@@ -21,22 +21,22 @@ WORKFLOW_TEMPLATES = {
 }
 
 
-def _consented_patients() -> list[dict]:
+def _consented_patients(*, organization_id: int | None = None) -> list[dict]:
     return [
         patient
-        for patient in list_records("patients")
+        for patient in list_records("patients", organization_id=organization_id)
         if bool(patient.get("consent_to_contact", False))
     ]
 
 
-def due_followups(workflow: str = "Inactive patient recovery") -> list[dict]:
+def due_followups(workflow: str = "Inactive patient recovery", *, organization_id: int | None = None) -> list[dict]:
     """Return eligible CRM patients without sending or changing any record."""
-    consented = _consented_patients()
+    consented = _consented_patients(organization_id=organization_id)
     if workflow == "Appointment reminders":
         today = date.today().isoformat()
         patient_ids = {
             str(row.get("patient_id"))
-            for row in list_records("appointments")
+            for row in list_records("appointments", organization_id=organization_id)
             if row.get("status") == "Scheduled"
             and str(row.get("appointment_date", "")) >= today
         }
@@ -48,7 +48,7 @@ def due_followups(workflow: str = "Inactive patient recovery") -> list[dict]:
 
     candidates = []
     for patient in consented:
-        profile = patient_profile(str(patient.get("patient_id")))
+        profile = patient_profile(str(patient.get("patient_id")), organization_id=organization_id)
         flags = profile["risk_flags"]
         if workflow == "Package renewal":
             eligible = "Package renewal due" in flags

@@ -59,6 +59,49 @@ from core.identity.default_organization import (
     resolve_default_organization_id,
 )
 
+# Phase 8: when on, this module resolves ITS organization via the live
+# authenticated session (core.identity.live_organization) instead of
+# always the single transitional default — required for genuine
+# multi-organization Jarvis memory isolation (a second organization must
+# get its own learning memory, never Organization A's). Defaults OFF,
+# its own independent kill switch, matching every other Phase 8
+# mechanism. See docs/V2_PHASE8_SAAS_ONBOARDING.md.
+JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED = os.getenv(
+    "LEADLENS_V2_JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED", ""
+).strip().lower() in {"1", "true", "yes"}
+
+
+def _resolve_organization_id(session: Session) -> int:
+    if JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED:
+        from core.identity.live_organization import resolve_live_organization_id
+
+        return resolve_live_organization_id(session)
+    return resolve_default_organization_id(session)
+
+
+def _is_default_organization(session: Session, organization_id: int) -> bool:
+    return organization_id == resolve_default_organization_id(session)
+
+
+def _current_call_resolves_to_default_organization() -> bool:
+    """True unless tenant-authoritative mode is on AND the live
+    organization resolves to something other than the transitional
+    default — used to decide whether the shared legacy JSON file (which
+    has always belonged to that one default organization) is safe to
+    read/write for this call. Fails safe (True — i.e. behaves like
+    "default organization", touching the legacy file as it always has)
+    if resolution itself fails, since that's the byte-identical
+    pre-Phase-8 behavior."""
+    if not JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED:
+        return True
+    try:
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            live_org_id = _resolve_organization_id(session)
+            return _is_default_organization(session, live_org_id)
+    except SQLAlchemyError:
+        return True
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -229,7 +272,7 @@ def _load_from_db() -> dict[str, Any] | None:
     fall back to the legacy JSON file)."""
     engine = _get_engine()
     with session_scope(engine) as session:
-        org_id = resolve_default_organization_id(session)
+        org_id = _resolve_organization_id(session)
         by_key: dict[str, list[dict[str, Any]]] = {key: [] for key in _AUTHORED_KEYS}
         latest_updated_at: datetime | None = None
         total_rows = 0
@@ -275,7 +318,7 @@ def _write_to_db(data: dict[str, Any]) -> None:
     usage ever grows large enough to matter."""
     engine = _get_engine()
     with session_scope(engine) as session:
-        org_id = resolve_default_organization_id(session)
+        org_id = _resolve_organization_id(session)
         now = datetime.now(timezone.utc)
         for key, record_type in _RECORD_TYPE_BY_KEY.items():
             for row in data.get(key, []):
@@ -327,6 +370,14 @@ def load_learning_memory() -> dict[str, Any]:
                 STORE,
                 exc_info=True,
             )
+    # Phase 8: once tenant-authoritative, a genuinely different
+    # (non-default) organization must never fall back to the shared
+    # legacy JSON file — that file has always belonged to the one
+    # transitional default organization (services/jarvis_context.py
+    # reads it directly, per this module's docstring). Returns fresh,
+    # empty memory instead of leaking another organization's data.
+    if not _current_call_resolves_to_default_organization():
+        return _fresh_memory()
     return _load_from_json_only()
 
 
@@ -335,11 +386,14 @@ def _save_learning_memory(data: dict[str, Any]) -> None:
         data = _migrate(data)
         data["schema_version"] = SCHEMA_VERSION
         data["updated_at"] = _now()
-        # Always written first and unconditionally: this is the
-        # durability floor Jarvis has always had, and
-        # services/jarvis_context.py's LEARNING_FILE reads it directly —
-        # see module docstring.
-        _write_json_compat(data)
+        # Always written first and unconditionally for the default
+        # organization — this is the durability floor Jarvis has always
+        # had, and services/jarvis_context.py's LEARNING_FILE reads it
+        # directly — see module docstring. Phase 8: skipped for a
+        # genuinely different (non-default) organization, so its writes
+        # never land in the default organization's shared file.
+        if _current_call_resolves_to_default_organization():
+            _write_json_compat(data)
         if not _DB_DISABLED:
             try:
                 _write_to_db(data)

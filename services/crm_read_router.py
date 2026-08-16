@@ -56,8 +56,24 @@ from core.db.models.clinic import (
 from core.db.models.shadow_sync import ReadMismatch
 from core.db.session import make_engine, session_scope
 from core.identity.default_organization import resolve_default_organization_id
+from core.identity.live_organization import resolve_live_organization_id
 
 _LOG = logging.getLogger(__name__)
+
+# Phase 8: when on, relational storage is authoritative for ALL nine CRM
+# entities' reads (bypassing the per-entity LEADLENS_V2_READ_<ENTITY>
+# flags below, which remain meaningful only for the gradual, per-entity
+# Phase 4 rollout when this is off), scoped to the CURRENT live
+# organization (core.identity.live_organization) rather than always the
+# single transitional default — the fix that makes a second organization's
+# CRM data genuinely separate instead of sharing one global legacy list.
+# Defaults OFF, its own independent kill switch — see
+# docs/V2_PHASE8_SAAS_ONBOARDING.md. Paired with
+# services/crm_tenant_writer.py, which clinic_data_service.py's
+# add_record()/update_record() route to when this is on.
+TENANT_AUTHORITATIVE_ENABLED = os.getenv(
+    "LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED", ""
+).strip().lower() in {"1", "true", "yes"}
 
 
 # Every flag defaults OFF — a compelling documented reason would be
@@ -480,7 +496,24 @@ def compare_rows(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def read_rows(entity: str, legacy_reader: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def read_rows(
+    entity: str,
+    legacy_reader: Callable[[], list[dict[str, Any]]],
+    *,
+    organization_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """`organization_id`, when supplied, is used verbatim instead of
+    resolving one — for programmatic multi-org callers (tests,
+    scheduler enumeration) that already know exactly which organization
+    they're operating for and must not depend on an implicit live
+    session. The live Streamlit UI never passes this; it relies on
+    resolve_live_organization_id()'s session-based resolution instead."""
+    if TENANT_AUTHORITATIVE_ENABLED and entity in _MODEL_BY_ENTITY:
+        engine = _get_engine()
+        with session_scope(engine) as session:
+            org_id = organization_id if organization_id is not None else resolve_live_organization_id(session)
+            return _read_relational_rows(session, org_id, entity)
+
     if entity not in READ_FLAGS:
         return legacy_reader()  # e.g. "services" has no legacy source at all yet
 

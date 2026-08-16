@@ -70,4 +70,12 @@ class OrganizationSettings(OrgScopedMixin, TimestampMixin, Base):
     target_monthly_revenue: Mapped[float | None] = mapped_column()
     extra: Mapped[str | None] = mapped_column(Text)  # JSON-encoded catch-all
 
+    # Phase 8: whether scheduler/outbound automations run for this
+    # organization at all. Defaults False so a newly-onboarded
+    # organization never fires outbound messages before an operator has
+    # deliberately reviewed and enabled it — see
+    # scheduler/run_scheduled_checks.py::resolve_scheduler_organizations()
+    # and docs/V2_PHASE8_SAAS_ONBOARDING.md.
+    automations_enabled: Mapped[bool] = mapped_column(nullable=False, default=False)
+
     organization: Mapped["Organization"] = relationship(back_populates="settings")

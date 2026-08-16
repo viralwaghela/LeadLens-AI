@@ -49,11 +49,50 @@ def _next_lead_id(leads: list[dict]) -> str:
     return f"L-{next_num:03d}"
 
 
+class AmbiguousMultiOrgDatabaseError(Exception):
+    """Phase 8.1: this endpoint has no organization concept at all — it
+    writes straight into the single legacy memory_store id=1 row. That is
+    fine for a single-clinic DATABASE_URL (the only supported
+    configuration today), but would be silently wrong the moment this
+    database is shared by more than one Organization (Phase 0's
+    `organizations` table) — a lead submitted through this public form
+    would land in an arbitrary/first clinic's data with no way to tell
+    which clinic the visitor meant. Rather than do that silently, this
+    endpoint refuses to write at all if it detects more than one
+    organization row. See docs/V2_PHASE8_SAAS_ONBOARDING.md's Phase 8.1
+    addendum — this is a minimal safety guard, not a fix; making this
+    endpoint genuinely organization-aware is out of scope here."""
+
+
+def _reject_if_ambiguous_multi_org(conn) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.organizations')")
+            table_exists = cur.fetchone()[0] is not None
+            if not table_exists:
+                return  # pre-Phase-0 database — nothing to check, behave as always
+            cur.execute("SELECT count(*) FROM organizations")
+            count = cur.fetchone()[0]
+    except Exception:
+        # A data-hygiene guard, not an authorization boundary: if the
+        # check itself fails (unexpected schema, permissions, etc.), fail
+        # OPEN here rather than breaking every single-clinic deployment's
+        # working booking form over a guard that was only ever meant to
+        # catch the specific, currently-hypothetical multi-org case.
+        return
+    if count > 1:
+        raise AmbiguousMultiOrgDatabaseError(
+            f"{count} organizations exist in this database; this endpoint "
+            "is not organization-aware and refuses to write ambiguously."
+        )
+
+
 def _insert_lead(database_url: str, name: str, phone: str, email: str, message: str) -> str:
     import psycopg2  # imported lazily so the function still loads without it during local edits
 
     conn = psycopg2.connect(database_url)
     try:
+        _reject_if_ambiguous_multi_org(conn)
         with conn:
             with conn.cursor() as cur:
                 # Same guard as core/memory.py's _pg_atomic_update: bounded

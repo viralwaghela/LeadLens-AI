@@ -59,16 +59,33 @@ def _get_engine():
 
 
 def _resolve_context() -> TenantContext | None:
-    """Resolves the transitional system context fresh, in its own
-    session — used by the sync_* wrapper functions below so every live
-    call site (audit_event(), integration_manager_v21.py,
+    """Resolves a system context fresh, in its own session — used by the
+    sync_* wrapper functions below so every live call site
+    (audit_event(), integration_manager_v21.py,
     scheduler/run_scheduled_checks.py) doesn't need to plumb a
-    TenantContext through itself yet. Returns None (caller should
-    treat as "skip") if even organization resolution fails — never
-    fabricates a fallback organization."""
+    TenantContext through itself. Returns None (caller should treat as
+    "skip") if even organization resolution fails — never fabricates a
+    fallback organization.
+
+    Phase 8: when TENANT_CONTEXT_ENABLED is on, prefers the CURRENT live
+    authenticated session's organization (core.identity.live_organization)
+    over the single transitional default — required for genuine
+    multi-organization audit-event isolation (Organization B's actions
+    must never be attributed to the transitional default organization
+    just because no organization_id was explicitly threaded through).
+    Falls back to the transitional resolver exactly as before for
+    scripts/scheduler/system calls with no live session, or when this
+    flag is off."""
     try:
         engine = _get_engine()
         with session_scope(engine) as session:
+            if TENANT_CONTEXT_ENABLED:
+                from core.identity.live_organization import resolve_live_organization_id
+
+                organization_id = resolve_live_organization_id(session)
+                from core.identity.tenant_context import ActorType, build_system_context
+
+                return build_system_context(session, organization_id=organization_id, actor_type=ActorType.SYSTEM)
             return build_transitional_context(session)
     except Exception:  # noqa: BLE001 - resolution failure must never break the caller
         _LOG.error("tenant_resolution_failed for operational shadow sync.", exc_info=True)

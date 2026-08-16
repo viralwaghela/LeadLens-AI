@@ -61,6 +61,12 @@ def _require_manage_permission(entity: str) -> None:
     if permission:
         require_permission(permission)
 
+
+def _crm_tenant_authoritative_enabled() -> bool:
+    from services.crm_read_router import TENANT_AUTHORITATIVE_ENABLED
+
+    return TENANT_AUTHORITATIVE_ENABLED
+
 PATIENT_STATUSES = {"Active", "Inactive", "Renewal Due", "Archived"}
 PACKAGE_TEMPLATE_STATUSES = {"Active", "Archived"}
 APPOINTMENT_STATUSES = {
@@ -126,25 +132,30 @@ def _read_rows_legacy(entity: str) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)]
 
 
-def _read_rows(entity: str) -> list[dict[str, Any]]:
+def _read_rows(entity: str, *, organization_id: int | None = None) -> list[dict[str, Any]]:
     """Phase 4's single read-routing hook. list_records(), get_record(),
     search_records(), records_with_patient_names(), patient_profile(),
     patient_risk_summary(), and clinic_metrics() are all built on top
     of this function (directly or transitively) — routing here alone
     covers every reader (UI, Jarvis, scheduler, reports) without
     touching any of them. See services/crm_read_router.py and
-    docs/V2_PHASE4_READ_CUTOVER.md."""
+    docs/V2_PHASE4_READ_CUTOVER.md. `organization_id` (Phase 8) is an
+    escape hatch for programmatic multi-org callers (tests, scheduler
+    enumeration) — the live UI never passes it, relying on the live
+    session-based resolution instead. See services/crm_tenant_writer.py
+    for the write-side equivalent."""
     from services.crm_read_router import read_rows
 
-    return read_rows(entity, legacy_reader=lambda: _read_rows_legacy(entity))
+    return read_rows(entity, legacy_reader=lambda: _read_rows_legacy(entity), organization_id=organization_id)
 
 
 def list_records(
     entity: str,
     *,
     include_archived: bool = False,
+    organization_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    rows = _read_rows(entity)
+    rows = _read_rows(entity, organization_id=organization_id)
     if include_archived:
         return rows
     return [
@@ -439,11 +450,17 @@ def _validate_record(
     return row
 
 
-def add_record(entity: str, data: dict[str, Any]) -> dict[str, Any]:
+def add_record(entity: str, data: dict[str, Any], *, organization_id: int | None = None) -> dict[str, Any]:
     _require_manage_permission(entity)
+    row = _validate_record(entity, data)
+
+    if _crm_tenant_authoritative_enabled():
+        from services.crm_tenant_writer import add_row
+
+        return add_row(entity, row, organization_id=organization_id)
+
     rows = _read_rows(entity)
     _, id_field, _ = ENTITY_META[entity]
-    row = _validate_record(entity, data)
     row[id_field] = _clean_text(row.get(id_field)) or _next_id(entity, rows)
     if any(str(item.get(id_field)) == row[id_field] for item in rows):
         raise ValueError(f"{row[id_field]} already exists.")
@@ -461,9 +478,10 @@ def get_record(
     record_id: str,
     *,
     include_archived: bool = False,
+    organization_id: int | None = None,
 ) -> dict[str, Any] | None:
     _, id_field, _ = ENTITY_META[entity]
-    for row in list_records(entity, include_archived=include_archived):
+    for row in list_records(entity, include_archived=include_archived, organization_id=organization_id):
         if str(row.get(id_field)) == str(record_id):
             return row
     return None
@@ -473,14 +491,28 @@ def update_record(
     entity: str,
     record_id: str,
     updates: dict[str, Any],
+    *,
+    organization_id: int | None = None,
 ) -> dict[str, Any]:
     _require_manage_permission(entity)
-    rows = _read_rows(entity)
     _, id_field, _ = ENTITY_META[entity]
     safe_updates = dict(updates)
     safe_updates.pop(id_field, None)
     safe_updates.pop("created_at", None)
     safe_updates = _validate_record(entity, safe_updates, partial=True)
+
+    if _crm_tenant_authoritative_enabled():
+        from services.crm_tenant_writer import update_row
+
+        current = get_record(entity, record_id, include_archived=True, organization_id=organization_id)
+        if current is None:
+            raise KeyError(f"{entity.rstrip('s').title()} {record_id} was not found.")
+        merged = dict(current)
+        merged.update(safe_updates)
+        merged = _validate_record(entity, merged)
+        return update_row(entity, record_id, merged, organization_id=organization_id)
+
+    rows = _read_rows(entity)
     for index, row in enumerate(rows):
         if str(row.get(id_field)) == str(record_id):
             merged = dict(row)
@@ -496,11 +528,12 @@ def update_record(
     raise KeyError(f"{entity.rstrip('s').title()} {record_id} was not found.")
 
 
-def archive_record(entity: str, record_id: str) -> dict[str, Any]:
+def archive_record(entity: str, record_id: str, *, organization_id: int | None = None) -> dict[str, Any]:
     return update_record(
         entity,
         record_id,
         {"status": "Archived", "archived": True},
+        organization_id=organization_id,
     )
 
 
@@ -509,8 +542,9 @@ def search_records(
     query: str = "",
     *,
     fields: Iterable[str] | None = None,
+    organization_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    rows = list_records(entity)
+    rows = list_records(entity, organization_id=organization_id)
     needle = _clean_text(query).casefold()
     if not needle:
         return rows
@@ -526,17 +560,17 @@ def search_records(
     ]
 
 
-def _patient_name_map() -> dict[str, str]:
+def _patient_name_map(*, organization_id: int | None = None) -> dict[str, str]:
     return {
         str(row.get("patient_id")): str(row.get("name", "Unknown patient"))
-        for row in list_records("patients")
+        for row in list_records("patients", organization_id=organization_id)
     }
 
 
-def records_with_patient_names(entity: str) -> list[dict[str, Any]]:
-    names = _patient_name_map()
+def records_with_patient_names(entity: str, *, organization_id: int | None = None) -> list[dict[str, Any]]:
+    names = _patient_name_map(organization_id=organization_id)
     rows = []
-    for item in list_records(entity):
+    for item in list_records(entity, organization_id=organization_id):
         row = dict(item)
         if row.get("patient_id"):
             row["patient_name"] = names.get(
@@ -546,29 +580,29 @@ def records_with_patient_names(entity: str) -> list[dict[str, Any]]:
     return rows
 
 
-def patient_profile(patient_id: str) -> dict[str, Any]:
-    patient = get_record("patients", patient_id)
+def patient_profile(patient_id: str, *, organization_id: int | None = None) -> dict[str, Any]:
+    patient = get_record("patients", patient_id, organization_id=organization_id)
     if patient is None:
         raise KeyError(f"Patient {patient_id} was not found.")
 
     appointments = [
         row
-        for row in list_records("appointments")
+        for row in list_records("appointments", organization_id=organization_id)
         if str(row.get("patient_id")) == str(patient_id)
     ]
     packages = [
         row
-        for row in list_records("packages")
+        for row in list_records("packages", organization_id=organization_id)
         if str(row.get("patient_id")) == str(patient_id)
     ]
     payments = [
         row
-        for row in list_records("payments")
+        for row in list_records("payments", organization_id=organization_id)
         if str(row.get("patient_id")) == str(patient_id)
     ]
     progress_notes = [
         row
-        for row in list_records("progress_notes")
+        for row in list_records("progress_notes", organization_id=organization_id)
         if str(row.get("patient_id")) == str(patient_id)
     ]
 
@@ -671,10 +705,10 @@ def patient_profile(patient_id: str) -> dict[str, Any]:
     }
 
 
-def patient_risk_summary() -> list[dict[str, Any]]:
+def patient_risk_summary(*, organization_id: int | None = None) -> list[dict[str, Any]]:
     results = []
-    for patient in list_records("patients"):
-        profile = patient_profile(str(patient.get("patient_id")))
+    for patient in list_records("patients", organization_id=organization_id):
+        profile = patient_profile(str(patient.get("patient_id")), organization_id=organization_id)
         results.append(
             {
                 "patient_id": patient.get("patient_id"),
@@ -697,13 +731,13 @@ def patient_risk_summary() -> list[dict[str, Any]]:
     )
 
 
-def clinic_metrics() -> dict[str, Any]:
-    patients = list_records("patients")
-    appointments = list_records("appointments")
-    packages = list_records("packages")
-    payments = list_records("payments")
-    therapists = list_records("therapists")
-    risk_rows = patient_risk_summary()
+def clinic_metrics(*, organization_id: int | None = None) -> dict[str, Any]:
+    patients = list_records("patients", organization_id=organization_id)
+    appointments = list_records("appointments", organization_id=organization_id)
+    packages = list_records("packages", organization_id=organization_id)
+    payments = list_records("payments", organization_id=organization_id)
+    therapists = list_records("therapists", organization_id=organization_id)
+    risk_rows = patient_risk_summary(organization_id=organization_id)
     today = date.today().isoformat()
     return {
         "patients": len(patients),

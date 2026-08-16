@@ -14,7 +14,8 @@ name: CI
 # tests/test_phase4_crm_read_cutover.py, tests/test_phase5_tenant_context.py,
 # tests/test_phase6_integration_credentials.py,
 # tests/test_phase7_auth_cutover.py, tests/test_phase7_audit.py,
-# tests/test_phase7_1_hardening.py, and tests/test_phase7_1_1_hardening.py
+# tests/test_phase7_1_hardening.py, tests/test_phase7_1_1_hardening.py,
+# tests/test_phase8_saas_onboarding.py, and tests/test_phase8_1_hardening.py
 # are all pytest-collectible like
 # tests/test_phase0_schema.py, and all exercise
 # backfill/repair/parity/read-routing/tenant-resolution/credential-encryption/
@@ -23,10 +24,18 @@ name: CI
 # never a real provider API call, never scripts/*.py invoked directly
 # against any real database, and CI never sets any LEADLENS_V2_READ_*,
 # LEADLENS_V2_DUAL_WRITE_ENABLED, LEADLENS_V2_TENANT_CONTEXT_ENABLED,
-# LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED, or LEADLENS_V2_AUTH_ENABLED
-# cutover flag, so CI can never accidentally activate production
-# cutover behavior. Argon2id password hashing (Phase 1, and every
-# Phase 7/7.1 test account) is fully local, Phase 2/3/4/5's DB/JSON storage
+# LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED, LEADLENS_V2_AUTH_ENABLED,
+# LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED,
+# LEADLENS_V2_ORG_SCOPED_SETTINGS_ENABLED,
+# LEADLENS_V2_JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED,
+# LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED, or
+# LEADLENS_V2_AUDIT_TENANT_AUTHORITATIVE_ENABLED cutover flag
+# (tests/test_phase8_saas_onboarding.py and tests/test_phase8_1_hardening.py
+# set all of these only inside their own isolated fixtures via monkeypatch,
+# never at the environment/job level), so CI can never accidentally
+# activate production cutover behavior. Argon2id password hashing
+# (Phase 1, and every Phase 7/7.1 test account) is fully local, Phase
+# 2/3/4/5's DB/JSON storage
 # is fully local too, and Phase 6's Fernet encryption runs against a
 # per-test-generated throwaway key (never a real
 # LEADLENS_CREDENTIAL_ENCRYPTION_KEY) — no external service, no secret,
@@ -80,7 +89,7 @@ jobs:
           done
           echo "Clean environment confirmed — no real credentials present."
 
-      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 7.1 + Phase 7.1.1)
+      - name: Run pytest-collectible tests (existing + Phase 0 + Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5 + Phase 6 + Phase 7 + Phase 7.1 + Phase 7.1.1 + Phase 8 + Phase 8.1)
         run: python -m pytest tests/ -v
 
       - name: Run script-style regression tests

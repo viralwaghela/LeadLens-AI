@@ -56,6 +56,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from core.identity.tenant_context import TenantContext  # noqa: E402
 from core.memory import add_memory_entry, ensure_database, get_memory_section  # noqa: E402
 
 logger = logging.getLogger("scheduler")
@@ -75,13 +76,25 @@ class CheckResult:
     detail: str = ""
 
 
-CHECKS: list[Callable[[], "CheckResult | None"]] = []
+CHECKS: list[Callable[["TenantContext | None"], "CheckResult | None"]] = []
 
 
-def check(func: Callable[[], "CheckResult | None"]) -> Callable[[], "CheckResult | None"]:
-    """Decorator: register a function to run on every scheduler pass."""
+def check(
+    func: Callable[["TenantContext | None"], "CheckResult | None"],
+) -> Callable[["TenantContext | None"], "CheckResult | None"]:
+    """Decorator: register a function to run on every scheduler pass.
+    Phase 8.1: every check function now takes one optional keyword-only
+    `context: TenantContext | None = None` argument — omitted (or None)
+    preserves the exact pre-Phase-8.1 single-organization behavior
+    (implicit, transitional-default-org resolution throughout); supplied,
+    every CRM read and generated action inside the check is scoped to
+    that context's organization_id instead. See run_all_checks()."""
     CHECKS.append(func)
     return func
+
+
+def _org_id(context: "TenantContext | None") -> int | None:
+    return context.organization_id if context is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -90,26 +103,36 @@ def check(func: Callable[[], "CheckResult | None"]) -> Callable[[], "CheckResult
 # ---------------------------------------------------------------------------
 
 
-def _ledger_key(check_name: str, item_key: str) -> str:
-    return f"{check_name}::{item_key}"
+def _ledger_key(check_name: str, item_key: str, organization_id: int | None) -> str:
+    """Phase 8.1: when an explicit organization_id is supplied (multi-org
+    scheduler mode), the key is organization-scoped — so the exact same
+    (check, item_key) pair firing under two different organizations is
+    tracked independently, never suppressing one because the other
+    already fired. Omitted (the single-organization legacy call shape):
+    the key format is byte-identical to before Phase 8.1, so existing
+    ledger entries for the transitional default organization keep
+    matching without any migration."""
+    if organization_id is None:
+        return f"{check_name}::{item_key}"
+    return f"org:{organization_id}::{check_name}::{item_key}"
 
 
-def already_flagged(check_name: str, item_key: str) -> bool:
-    """True if this exact (check, item) pair has already been alerted on
-    or queued by a previous run. raise_owner_alert / queue_patient_action
-    already call this internally; only check functions that need to
-    branch on it directly (e.g. to skip other work too) need to call it
-    themselves."""
-    target = _ledger_key(check_name, item_key)
+def already_flagged(check_name: str, item_key: str, *, organization_id: int | None = None) -> bool:
+    """True if this exact (check, item, organization) pair has already
+    been alerted on or queued by a previous run. raise_owner_alert /
+    queue_patient_action already call this internally; only check
+    functions that need to branch on it directly (e.g. to skip other
+    work too) need to call it themselves."""
+    target = _ledger_key(check_name, item_key, organization_id)
     return any(
         entry.get("data", {}).get("key") == target
         for entry in get_memory_section(ALERT_LEDGER_SECTION)
     )
 
 
-def _mark_flagged(check_name: str, item_key: str, note: str = "") -> None:
+def _mark_flagged(check_name: str, item_key: str, note: str = "", *, organization_id: int | None = None) -> None:
     add_memory_entry(ALERT_LEDGER_SECTION, {
-        "key": _ledger_key(check_name, item_key),
+        "key": _ledger_key(check_name, item_key, organization_id),
         "check": check_name,
         "item_key": item_key,
         "note": note,
@@ -134,6 +157,7 @@ def raise_owner_alert(
     *,
     department: str = "Operations",
     level: str = "Risk",
+    context: "TenantContext | None" = None,
 ) -> bool:
     """Write a Tier 1, owner-facing alert Jarvis will surface next time
     the owner opens the app. Nothing external is contacted.
@@ -142,8 +166,11 @@ def raise_owner_alert(
     thing being flagged, e.g. f"{patient_id}:{date.today()}" for a daily
     per-patient check. Returns False (writing nothing) if this exact
     (check_name, item_key) pair was already alerted on by a previous run.
+    `context`, when supplied (Phase 8.1 multi-org scheduler mode), scopes
+    idempotency to that organization — see _ledger_key().
     """
-    if already_flagged(check_name, item_key):
+    organization_id = _org_id(context)
+    if already_flagged(check_name, item_key, organization_id=organization_id):
         return False
     add_memory_entry("reports", {
         "type": level,
@@ -153,7 +180,7 @@ def raise_owner_alert(
         "source": "scheduler",
         "check": check_name,
     })
-    _mark_flagged(check_name, item_key, title)
+    _mark_flagged(check_name, item_key, title, organization_id=organization_id)
     return True
 
 
@@ -166,6 +193,7 @@ def queue_patient_action(
     payload: dict,
     title: str,
     impact: str = "",
+    context: "TenantContext | None" = None,
 ) -> dict | None:
     """Prepare a patient-facing action in the existing Approval Queue.
     Never sends anything — the item sits as "Awaiting approval" until a
@@ -175,9 +203,12 @@ def queue_patient_action(
     also fingerprints the exact payload as a second, independent safety
     net, so even a ledger miss can't produce a duplicate for identical
     content. Returns None if this pair was already queued by a previous
-    run.
-    """
-    if already_flagged(check_name, item_key):
+    run. `context`, when supplied, is passed straight through to
+    prepare_execution() as its own tenant_context — the generated
+    approval/queue item is stamped with that organization_id, never the
+    transitional default, and idempotency is scoped to it too."""
+    organization_id = _org_id(context)
+    if already_flagged(check_name, item_key, organization_id=organization_id):
         return None
     from services.integration_manager_v21 import prepare_execution
 
@@ -188,9 +219,36 @@ def queue_patient_action(
         title=title,
         impact=impact,
         recommendation_id=f"scheduler:{check_name}",
+        tenant_context=context,
     )
-    _mark_flagged(check_name, item_key, title)
+    _mark_flagged(check_name, item_key, title, organization_id=organization_id)
     return item
+
+
+def _company_profile(context: "TenantContext | None") -> dict:
+    """Phase 8.1: org-scoped company/settings read for checks that need
+    it (google_review_automation's review link,
+    corporate_lead_automation's business name) — without this, those
+    checks would read core.memory.load_company()'s single global dict
+    regardless of which organization is being enumerated, leaking
+    Organization A's business name/review link into Organization B's
+    generated outreach. Falls back to the legacy global read when no
+    context is supplied or org-scoped settings are off, exactly
+    preserving pre-Phase-8.1 behavior."""
+    from core.memory import load_company
+
+    if context is None:
+        return load_company()
+    from services.platform_data import ORG_SCOPED_SETTINGS_ENABLED
+
+    if not ORG_SCOPED_SETTINGS_ENABLED:
+        return load_company()
+    from core.db.session import session_scope
+    from core.identity.organization_profile_service import get_settings
+    from services.platform_data import _get_engine
+
+    with session_scope(_get_engine()) as session:
+        return get_settings(session, context.organization_id)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +265,7 @@ LOW_BOOKING_MIN_UTILIZATION = 0.5
 
 
 @check
-def low_booking_alert() -> CheckResult:
+def low_booking_alert(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: alert the owner when the clinic is under-booked for the
     week ahead relative to therapist capacity — catching it while there's
     still time to fill the gap, not after the week has already passed.
@@ -220,6 +278,7 @@ def low_booking_alert() -> CheckResult:
 
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     today = date.today()
     window = {
         (today + timedelta(days=offset)).isoformat()
@@ -228,12 +287,12 @@ def low_booking_alert() -> CheckResult:
 
     booked = sum(
         1
-        for row in list_records("appointments")
+        for row in list_records("appointments", organization_id=org_id)
         if row.get("status") == "Scheduled" and row.get("appointment_date") in window
     )
     weekly_capacity = sum(
         int(row.get("weekly_capacity", 0) or 0)
-        for row in list_records("therapists")
+        for row in list_records("therapists", organization_id=org_id)
         if row.get("status") == "Active"
     )
 
@@ -260,6 +319,7 @@ def low_booking_alert() -> CheckResult:
             f"{LOW_BOOKING_MIN_UTILIZATION:.0%}+)."
         ),
         department="Operations",
+        context=context,
     )
     return CheckResult(
         alerts_raised=1 if raised else 0,
@@ -272,7 +332,7 @@ CAPACITY_ALERT_LOOKAHEAD_DAYS = 7
 
 
 @check
-def capacity_alert() -> CheckResult:
+def capacity_alert(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: detection + surfacing only, never auto-fixing (per
     docs/AUTOMATION_ROADMAP.md) — flags a therapist whose scheduled load
     for the week ahead exceeds their own weekly_capacity, so the owner
@@ -285,6 +345,7 @@ def capacity_alert() -> CheckResult:
 
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     today = date.today()
     window = {
         (today + timedelta(days=offset)).isoformat()
@@ -292,7 +353,7 @@ def capacity_alert() -> CheckResult:
     }
 
     booked_by_therapist: dict[str, int] = {}
-    for row in list_records("appointments"):
+    for row in list_records("appointments", organization_id=org_id):
         if row.get("status") != "Scheduled" or row.get("appointment_date") not in window:
             continue
         therapist_id = row.get("therapist_id")
@@ -301,13 +362,13 @@ def capacity_alert() -> CheckResult:
 
     therapist_names = {
         row.get("therapist_id"): row.get("name") or row.get("therapist_id")
-        for row in list_records("therapists")
+        for row in list_records("therapists", organization_id=org_id)
     }
 
     alerts_raised = 0
     skipped_duplicate = 0
     over_capacity_count = 0
-    for row in list_records("therapists"):
+    for row in list_records("therapists", organization_id=org_id):
         if row.get("status") != "Active":
             continue
         therapist_id = row.get("therapist_id")
@@ -330,6 +391,7 @@ def capacity_alert() -> CheckResult:
                 f"capacity of {capacity}."
             ),
             department="Operations",
+            context=context,
         )
         if raised:
             alerts_raised += 1
@@ -348,7 +410,7 @@ REVENUE_MONITORING_MIN_PACE = 0.7
 
 
 @check
-def revenue_monitoring() -> CheckResult:
+def revenue_monitoring(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: compares this month's revenue pace (Paid payments so far)
     against last month's revenue at the same day-of-month checkpoint, so
     a slow month gets caught while there's still time to act, not only
@@ -360,6 +422,7 @@ def revenue_monitoring() -> CheckResult:
 
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     today = date.today()
     this_month_start = today.replace(day=1)
     if this_month_start.month == 1:
@@ -370,7 +433,7 @@ def revenue_monitoring() -> CheckResult:
     checkpoint_day = min(today.day, last_month_days)
     last_month_checkpoint = last_month_start.replace(day=checkpoint_day)
 
-    payments = list_records("payments")
+    payments = list_records("payments", organization_id=org_id)
 
     def _sum_paid(start: date, end_inclusive: date) -> float:
         total = 0.0
@@ -410,6 +473,7 @@ def revenue_monitoring() -> CheckResult:
             f"{REVENUE_MONITORING_MIN_PACE:.0%}+)."
         ),
         department="Finance",
+        context=context,
     )
     return CheckResult(
         alerts_raised=1 if raised else 0,
@@ -419,7 +483,7 @@ def revenue_monitoring() -> CheckResult:
 
 
 @check
-def monthly_business_review() -> CheckResult:
+def monthly_business_review(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: a periodic digest of clinic health for the owner — not an
     alert about anything being wrong. Fires once per calendar month
     (deduped by year-month), not every run.
@@ -438,7 +502,7 @@ def monthly_business_review() -> CheckResult:
     from services.clinic_data_service import clinic_metrics
 
     today = date.today()
-    metrics = clinic_metrics()
+    metrics = clinic_metrics(organization_id=_org_id(context))
 
     message = (
         f"Active patients: {metrics['active_patients']}/{metrics['patients']}. "
@@ -457,6 +521,7 @@ def monthly_business_review() -> CheckResult:
         message=message,
         department="Executive",
         level="Info",
+        context=context,
     )
     return CheckResult(
         alerts_raised=1 if raised else 0,
@@ -471,7 +536,7 @@ LEAD_DATE_FIELDS = ("created_at", "inquiry_date", "date", "created", "timestamp"
 
 
 @check
-def lead_qualification_alert() -> CheckResult:
+def lead_qualification_alert(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: surfaces leads that look like they need review or
     follow-up — never scores or contacts a lead automatically, just
     flags what the owner should look at.
@@ -493,7 +558,7 @@ def lead_qualification_alert() -> CheckResult:
     from services.clinic_data_service import list_records
 
     today = date.today()
-    leads = list_records("leads")
+    leads = list_records("leads", organization_id=_org_id(context))
 
     open_leads = [
         row for row in leads
@@ -544,6 +609,7 @@ def lead_qualification_alert() -> CheckResult:
         title=f"{len(open_leads)} lead(s) need review",
         message=" ".join(message_parts),
         department="Sales",
+        context=context,
     )
     return CheckResult(
         alerts_raised=1 if raised else 0,
@@ -560,7 +626,7 @@ APPOINTMENT_REMINDER_TOLERANCE = timedelta(hours=1)
 
 
 @check
-def appointment_reminder() -> CheckResult:
+def appointment_reminder(context: "TenantContext | None" = None) -> CheckResult:
     """Reminds patients with a Scheduled appointment coming up in ~24 hours
     or ~2 hours.
 
@@ -581,12 +647,23 @@ def appointment_reminder() -> CheckResult:
     Each appointment gets at most one 24hr reminder sent and one 2hr
     reminder queued, ever — not per-day. These are one-time reminders
     tied to a specific appointment, not an ongoing situation like the
-    other checks in this file."""
+    other checks in this file.
+
+    Phase 8.1 known limitation: the 24hr branch's
+    send_appointment_rsvp_reminder() call is NOT yet organization-context
+    aware (services/appointment_messaging.py resolves its patient lookup,
+    clinic name, and WhatsApp credentials implicitly, the same way this
+    whole file did before Phase 8.1) — CRM reads for it below are
+    correctly org-scoped, but the actual send still resolves credentials
+    via the transitional default organization regardless of which
+    organization is being enumerated. Tracked as remaining technical
+    debt — see docs/V2_PHASE8_SAAS_ONBOARDING.md's Phase 8.1 addendum."""
     from datetime import datetime
 
     from services.appointment_messaging import send_appointment_rsvp_reminder
     from services.clinic_data_service import get_record, list_records
 
+    org_id = _org_id(context)
     now = datetime.now()
     sent_count = 0
     queued_count = 0
@@ -594,7 +671,7 @@ def appointment_reminder() -> CheckResult:
     skipped_unparseable = 0
 
     appointments = [
-        row for row in list_records("appointments")
+        row for row in list_records("appointments", organization_id=org_id)
         if row.get("status") == "Scheduled"
     ]
 
@@ -622,19 +699,19 @@ def appointment_reminder() -> CheckResult:
             item_key = f"{appointment.get('appointment_id')}:{label}"
 
             if label == "24hr":
-                if already_flagged("appointment_reminder", item_key):
+                if already_flagged("appointment_reminder", item_key, organization_id=org_id):
                     skipped_duplicate += 1
                     continue
                 result = send_appointment_rsvp_reminder(appointment)
                 # None means no consent/phone on file — nothing to send,
                 # and not worth tracking as "sent" or retrying every run,
                 # so still mark it flagged either way.
-                _mark_flagged("appointment_reminder", item_key)
+                _mark_flagged("appointment_reminder", item_key, organization_id=org_id)
                 if result is not None:
                     sent_count += 1
                 continue
 
-            patient = get_record("patients", appointment.get("patient_id"))
+            patient = get_record("patients", appointment.get("patient_id"), organization_id=org_id)
             if not patient or not bool(patient.get("consent_to_contact", False)):
                 continue
             phone = str(patient.get("phone", "")).strip()
@@ -658,6 +735,7 @@ def appointment_reminder() -> CheckResult:
                     f"{patient.get('name', appointment.get('patient_id'))}"
                 ),
                 impact="Routine appointment reminder, not a sales or money conversation.",
+                context=context,
             )
             if item is not None:
                 queued_count += 1
@@ -678,7 +756,7 @@ def appointment_reminder() -> CheckResult:
 
 
 @check
-def waiting_list_automation() -> CheckResult:
+def waiting_list_automation(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: surfaces a future appointment slot that just opened up via
     a cancellation, so the owner can offer it to a waitlisted patient.
 
@@ -701,16 +779,17 @@ def waiting_list_automation() -> CheckResult:
 
     from services.clinic_data_service import get_record, list_records
 
+    org_id = _org_id(context)
     today = date.today().isoformat()
     cancelled_future = [
-        row for row in list_records("appointments")
+        row for row in list_records("appointments", organization_id=org_id)
         if row.get("status") == "Cancelled" and str(row.get("appointment_date", "")) >= today
     ]
 
     alerts_raised = 0
     skipped_duplicate = 0
     for appointment in cancelled_future:
-        therapist = get_record("therapists", appointment.get("therapist_id"))
+        therapist = get_record("therapists", appointment.get("therapist_id"), organization_id=org_id)
         therapist_name = (
             therapist.get("name") if therapist else appointment.get("therapist_id", "an unknown therapist")
         )
@@ -726,6 +805,7 @@ def waiting_list_automation() -> CheckResult:
                 f"after a cancellation. Consider offering it to a waitlisted patient."
             ),
             department="Operations",
+            context=context,
         )
         if raised:
             alerts_raised += 1
@@ -751,7 +831,7 @@ def waiting_list_automation() -> CheckResult:
 
 
 @check
-def birthday_automation() -> CheckResult:
+def birthday_automation(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2: queues a birthday WhatsApp message for any consented patient
     whose recorded date_of_birth falls today (month and day match; the
     year is only used for age, never for matching).
@@ -768,12 +848,13 @@ def birthday_automation() -> CheckResult:
 
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     today = date.today()
     queued_count = 0
     skipped_duplicate = 0
     skipped_no_contact = 0
 
-    for patient in list_records("patients"):
+    for patient in list_records("patients", organization_id=org_id):
         dob_text = str(patient.get("date_of_birth", "") or "").strip()
         if not dob_text:
             continue
@@ -806,6 +887,7 @@ def birthday_automation() -> CheckResult:
             },
             title=f"Birthday message — {name}",
             impact="Goodwill message, not a sales or money conversation.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -831,7 +913,7 @@ GOOGLE_REVIEW_MAX_DAYS_AFTER = 3
 
 
 @check
-def google_review_automation() -> CheckResult:
+def google_review_automation(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2: queues a WhatsApp review request for a patient whose
     appointment was completed 1-3 days ago.
 
@@ -845,10 +927,10 @@ def google_review_automation() -> CheckResult:
     waiting_list_automation's one-time cancellation flag."""
     from datetime import date
 
-    from core.memory import load_company
     from services.clinic_data_service import list_records
 
-    review_link = str(load_company().get("google_review_link", "") or "").strip()
+    org_id = _org_id(context)
+    review_link = str(_company_profile(context).get("google_review_link", "") or "").strip()
     if not review_link:
         return CheckResult(detail="no google_review_link configured in Data Hub; skipped")
 
@@ -858,7 +940,7 @@ def google_review_automation() -> CheckResult:
     skipped_no_contact = 0
 
     completed = [
-        row for row in list_records("appointments")
+        row for row in list_records("appointments", organization_id=org_id)
         if row.get("status") == "Completed"
     ]
     for appointment in completed:
@@ -875,7 +957,7 @@ def google_review_automation() -> CheckResult:
 
         from services.clinic_data_service import get_record
 
-        patient = get_record("patients", appointment.get("patient_id"))
+        patient = get_record("patients", appointment.get("patient_id"), organization_id=org_id)
         if not patient or not bool(patient.get("consent_to_contact", False)):
             skipped_no_contact += 1
             continue
@@ -899,6 +981,7 @@ def google_review_automation() -> CheckResult:
             },
             title=f"Review request — {name}",
             impact="Goodwill/reputation request, not a sales or money conversation.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -918,7 +1001,7 @@ def google_review_automation() -> CheckResult:
 
 
 @check
-def missed_appointment_recovery() -> CheckResult:
+def missed_appointment_recovery(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2: queues a WhatsApp reschedule offer for a patient whose
     appointment is marked No-show.
 
@@ -933,18 +1016,19 @@ def missed_appointment_recovery() -> CheckResult:
     is a one-time event to follow up on."""
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     queued_count = 0
     skipped_duplicate = 0
     skipped_no_contact = 0
 
     no_shows = [
-        row for row in list_records("appointments")
+        row for row in list_records("appointments", organization_id=org_id)
         if row.get("status") == "No-show"
     ]
     for appointment in no_shows:
         from services.clinic_data_service import get_record
 
-        patient = get_record("patients", appointment.get("patient_id"))
+        patient = get_record("patients", appointment.get("patient_id"), organization_id=org_id)
         if not patient or not bool(patient.get("consent_to_contact", False)):
             skipped_no_contact += 1
             continue
@@ -968,6 +1052,7 @@ def missed_appointment_recovery() -> CheckResult:
             },
             title=f"Missed appointment follow-up — {name}",
             impact="Routine reschedule offer, not a sales or money conversation.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -987,7 +1072,7 @@ def missed_appointment_recovery() -> CheckResult:
 
 
 @check
-def inactive_patient_recovery() -> CheckResult:
+def inactive_patient_recovery(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2: queues a WhatsApp check-in for each patient
     services.live_workflow_service already identifies as inactive or
     overdue for a visit (reuses due_followups() rather than re-deriving
@@ -1003,12 +1088,13 @@ def inactive_patient_recovery() -> CheckResult:
 
     from services.live_workflow_service import due_followups
 
+    org_id = _org_id(context)
     month_key = date.today().isoformat()[:7]
     queued_count = 0
     skipped_duplicate = 0
     skipped_no_phone = 0
 
-    for patient in due_followups("Inactive patient recovery"):
+    for patient in due_followups("Inactive patient recovery", organization_id=org_id):
         phone = str(patient.get("phone", "")).strip()
         if not phone:
             skipped_no_phone += 1
@@ -1030,6 +1116,7 @@ def inactive_patient_recovery() -> CheckResult:
             },
             title=f"Inactive patient check-in — {name}",
             impact="Routine relationship check-in, not a sales or money conversation.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -1058,7 +1145,7 @@ NEW_PATIENT_FOLLOWUP_MIN_DAYS = 14
 
 
 @check
-def new_patient_recovery() -> CheckResult:
+def new_patient_recovery(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2: queues a "book your next session" WhatsApp message for a
     patient whose only completed appointment was their first, with no
     future appointment scheduled and enough time having passed to assume
@@ -1070,17 +1157,18 @@ def new_patient_recovery() -> CheckResult:
 
     from services.clinic_data_service import list_records
 
+    org_id = _org_id(context)
     today = date.today()
     queued_count = 0
     skipped_duplicate = 0
     skipped_no_contact = 0
 
-    appointments = list_records("appointments")
+    appointments = list_records("appointments", organization_id=org_id)
     by_patient: dict[str, list[dict]] = {}
     for row in appointments:
         by_patient.setdefault(str(row.get("patient_id")), []).append(row)
 
-    for patient in list_records("patients"):
+    for patient in list_records("patients", organization_id=org_id):
         patient_id = str(patient.get("patient_id"))
         patient_appointments = by_patient.get(patient_id, [])
         completed = [
@@ -1128,6 +1216,7 @@ def new_patient_recovery() -> CheckResult:
             },
             title=f"New patient follow-up — {name}",
             impact="Routine booking follow-up, not a sales or money conversation.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -1147,7 +1236,7 @@ def new_patient_recovery() -> CheckResult:
 
 
 @check
-def corporate_lead_automation() -> CheckResult:
+def corporate_lead_automation(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 2, research + draft only, never auto-send — deliberately more
     cautious than the standard "queue a WhatsApp, human approves and
     executes" Tier 2 pattern. Instead of preparing a send-able action,
@@ -1163,16 +1252,16 @@ def corporate_lead_automation() -> CheckResult:
     Fires once per lead, ever, not daily — a specific new lead is a
     one-time thing to draft outreach for, and re-drafting the same lead
     every hour while it sits in "New" would just be noise."""
-    from core.memory import load_company
     from services.clinic_data_service import list_records
 
-    business_name = str(load_company().get("business_name", "") or "our clinic")
+    org_id = _org_id(context)
+    business_name = str(_company_profile(context).get("business_name", "") or "our clinic")
     queued_count = 0
     skipped_duplicate = 0
     skipped_no_email = 0
 
     new_leads = [
-        row for row in list_records("corporate_clients")
+        row for row in list_records("corporate_clients", organization_id=org_id)
         if row.get("status") == "New"
     ]
     for lead in new_leads:
@@ -1203,6 +1292,7 @@ def corporate_lead_automation() -> CheckResult:
             },
             title=f"Corporate outreach draft — {company_name}",
             impact="Draft only — creates a Gmail draft for the owner to review and send, nothing is sent automatically.",
+            context=context,
         )
         if item is not None:
             queued_count += 1
@@ -1222,7 +1312,7 @@ def corporate_lead_automation() -> CheckResult:
 
 
 @check
-def therapist_schedule_optimizer() -> CheckResult:
+def therapist_schedule_optimizer(context: "TenantContext | None" = None) -> CheckResult:
     """Tier 1: suggest only, never auto-move a patient between therapists
     (per docs/AUTOMATION_ROADMAP.md) — complements capacity_alert, which
     only flags an over-booked therapist in isolation. This pairs that
@@ -1237,13 +1327,14 @@ def therapist_schedule_optimizer() -> CheckResult:
     from services.clinic_data_service import list_records
 
     today = date.today()
+    org_id = _org_id(context)
     window = {
         (today + timedelta(days=offset)).isoformat()
         for offset in range(CAPACITY_ALERT_LOOKAHEAD_DAYS)
     }
 
     booked_by_therapist: dict[str, int] = {}
-    for row in list_records("appointments"):
+    for row in list_records("appointments", organization_id=org_id):
         if row.get("status") != "Scheduled" or row.get("appointment_date") not in window:
             continue
         therapist_id = row.get("therapist_id")
@@ -1251,7 +1342,7 @@ def therapist_schedule_optimizer() -> CheckResult:
             booked_by_therapist[therapist_id] = booked_by_therapist.get(therapist_id, 0) + 1
 
     active_therapists = [
-        row for row in list_records("therapists") if row.get("status") == "Active"
+        row for row in list_records("therapists", organization_id=org_id) if row.get("status") == "Active"
     ]
 
     over_booked = []
@@ -1300,6 +1391,7 @@ def therapist_schedule_optimizer() -> CheckResult:
                 "has been changed."
             ),
             department="Operations",
+            context=context,
         )
         if raised:
             alerts_raised += 1
@@ -1319,50 +1411,142 @@ def therapist_schedule_optimizer() -> CheckResult:
 # ---------------------------------------------------------------------------
 
 
+def _multi_org_scheduler_enabled() -> bool:
+    return os.getenv("LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED", "").strip().lower() in {
+        "1", "true", "yes",
+    }
+
+
 def resolve_scheduler_organizations() -> list[int]:
-    """Phase 5: the set of organizations this scheduler run should
-    execute for. Today this is always exactly one element — the same
-    transitional single-clinic organization every other Phase 2-4
-    component resolves — because that's genuinely all that exists in
-    any live deployment right now. Kept as its own function (rather
-    than inlining the resolution) so a future phase that actually
-    enumerates multiple active organizations only needs to change this
-    one function; run_all_checks()'s 14 zero-argument check functions
-    do not need to change at all, since a single-element loop over them
-    is behaviorally identical to not looping. Returns an empty list
-    (fails closed, runs nothing) rather than guessing if resolution
-    itself fails — see docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md."""
+    """The set of organizations this scheduler run should execute for.
+
+    Phase 8: when LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED is on, this
+    genuinely enumerates every ACTIVE organization that has explicitly
+    opted into automations (OrganizationSettings.automations_enabled —
+    defaults False for every organization, including a freshly
+    provisioned one, so a new clinic never fires outbound automations
+    before an operator deliberately turns it on). Off (the default):
+    unchanged Phase 5 behavior — always exactly the single transitional
+    organization every other Phase 2-4 component resolves, since that's
+    genuinely all that's meant to run automatically in a deployment that
+    hasn't opted into multi-org scheduling. Returns an empty list (fails
+    closed, runs nothing) rather than guessing if resolution itself
+    fails — see docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md and
+    docs/V2_PHASE8_SAAS_ONBOARDING.md.
+
+    NOTE (Phase 8 known limitation, documented rather than silently
+    implied as solved): the 14 check functions CHECKS iterates below are
+    still zero-argument and read/write CRM data via the same implicit,
+    session-based organization resolution every other live caller uses
+    (core.identity.live_organization) — they are not yet individually
+    parameterized to run once per enumerated organization against THAT
+    organization's own tenant-scoped data. This function correctly
+    identifies WHICH organizations are eligible; looping the check
+    functions' actual CRM/messaging logic per-organization is deferred,
+    tracked technical debt (see docs/V2_PHASE8_SAAS_ONBOARDING.md's
+    "technical debt" section) — do not assume multi-org scheduler
+    ENUMERATION implies multi-org scheduler EXECUTION content yet."""
     try:
         from core.db.session import make_engine, session_scope
-        from core.identity.tenant_context import ActorType, build_transitional_context
 
         engine = make_engine()
         with session_scope(engine) as session:
-            context = build_transitional_context(session, actor_type=ActorType.SCHEDULER)
-            return [context.organization_id]
+            if not _multi_org_scheduler_enabled():
+                from core.identity.tenant_context import ActorType, build_transitional_context
+
+                context = build_transitional_context(session, actor_type=ActorType.SCHEDULER)
+                return [context.organization_id]
+
+            from core.db.models.organization import Organization, OrganizationSettings, OrganizationStatus
+
+            rows = (
+                session.query(Organization.id)
+                .join(OrganizationSettings, OrganizationSettings.organization_id == Organization.id)
+                .filter(
+                    Organization.status == OrganizationStatus.ACTIVE,
+                    OrganizationSettings.automations_enabled.is_(True),
+                )
+                .order_by(Organization.id.asc())
+                .all()
+            )
+            return [row[0] for row in rows]
     except Exception:  # noqa: BLE001 - resolution failure must not crash the whole scheduler run
         logger.error("scheduler_org_scope_failure: could not resolve any organization for this run.", exc_info=True)
         return []
 
 
+def _run_one_check(func, context: "TenantContext | None") -> CheckResult:
+    try:
+        return func(context) or CheckResult()
+    except Exception as error:  # a broken check must never take down the others
+        logger.exception("Check %r raised an exception", func.__name__)
+        return CheckResult(detail=f"FAILED: {type(error).__name__}: {error}")
+
+
+def _merge_results(a: CheckResult, b: CheckResult) -> CheckResult:
+    detail = a.detail
+    if b.detail:
+        detail = f"{detail} | {b.detail}" if detail else b.detail
+    return CheckResult(
+        alerts_raised=a.alerts_raised + b.alerts_raised,
+        approvals_queued=a.approvals_queued + b.approvals_queued,
+        messages_sent=a.messages_sent + b.messages_sent,
+        skipped_duplicate=a.skipped_duplicate + b.skipped_duplicate,
+        detail=detail,
+    )
+
+
 def run_all_checks() -> dict[str, CheckResult]:
-    # Phase 5: resolve which organization(s) this run covers, and build
-    # (but do not yet thread through — see docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md
-    # for why the 14 check functions below remain unchanged) a system
-    # TenantContext for observability/future use. Resolved once per run,
-    # not once per check — no hidden N+1 organization lookups.
+    """Phase 8.1: when LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED is on,
+    every enumerated organization gets its own TenantContext
+    (actor_type=SCHEDULER, no fake human identity — see
+    core.identity.tenant_context.build_system_context()), and every one
+    of the 14 check functions runs once per organization, scoped to
+    that context: reads, generated approvals/queue items, and
+    idempotency-ledger keys are all organization-specific (see
+    _org_id()/_ledger_key() and each check function's own
+    organization_id= threading). Results are summed per check name
+    across organizations so the run log's shape is unchanged.
+
+    Off (the default): unchanged Phase 5 behavior — every check runs
+    exactly once with context=None, which resolves everything via the
+    same implicit, transitional-default-organization path every
+    pre-Phase-8.1 call used. No organization-enumeration overhead, no
+    behavior change, for any deployment that hasn't opted in."""
     organizations = resolve_scheduler_organizations()
     if not organizations:
         logger.warning("No organization resolved for this scheduler run — running checks against legacy store only.")
-    results: dict[str, CheckResult] = {}
-    for func in CHECKS:
-        name = func.__name__
-        try:
-            outcome = func() or CheckResult()
-        except Exception as error:  # a broken check must never take down the others
-            logger.exception("Check %r raised an exception", name)
-            outcome = CheckResult(detail=f"FAILED: {type(error).__name__}: {error}")
-        results[name] = outcome
+
+    if not _multi_org_scheduler_enabled():
+        results: dict[str, CheckResult] = {}
+        for func in CHECKS:
+            results[func.__name__] = _run_one_check(func, None)
+        return results
+
+    from core.db.session import make_engine, session_scope
+    from core.identity.tenant_context import ActorType, build_system_context
+
+    results = {func.__name__: CheckResult() for func in CHECKS}
+    # Not disposed here, deliberately — matches resolve_scheduler_organizations()'s
+    # own engine handling immediately above and every module-level
+    # `_get_engine()` cache elsewhere in the codebase (e.g.
+    # services/relational_sync_service.py): make_engine() may return an
+    # externally-owned/shared engine (as every test in this file's
+    # multi-org fixtures does), and disposing an engine this function
+    # doesn't own would tear down that shared connection pool out from
+    # under the caller — for SQLite's in-memory test databases in
+    # particular, disposing discards the only connection holding the
+    # database alive, silently dropping every table.
+    engine = make_engine()
+    for organization_id in organizations:
+        with session_scope(engine) as session:
+            context = build_system_context(
+                session, organization_id=organization_id, actor_type=ActorType.SCHEDULER,
+                source="scheduler_multi_org",
+            )
+        for func in CHECKS:
+            outcome = _run_one_check(func, context)
+            results[func.__name__] = _merge_results(results[func.__name__], outcome)
     return results
 
 

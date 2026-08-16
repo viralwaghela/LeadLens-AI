@@ -64,7 +64,7 @@ feature in its own right.
    isolated data per clinic — not a small tweak. Don't assume this is
    solved; don't quietly add multi-tenant-shaped code without discussing
    it first, since it's a significant architectural decision. **V2 Phase
-   0 through 7 have been built** (a relational schema, an identity/
+   0 through 8 have been built** (a relational schema, an identity/
    authorization backend on top of it, Jarvis's learning-memory storage
    now genuinely running through this schema, CRM writes shadow-writing
    into the relational schema, CRM *reads* that can be routed to the
@@ -75,22 +75,31 @@ feature in its own right.
    `LEADLENS_V2_TENANT_CONTEXT_ENABLED` (**defaults OFF**), encrypted,
    organization-scoped WhatsApp/Gmail/Calendar credentials with a
    transitional environment-variable fallback, behind
-   `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**), and —
-   Phase 7 — a real per-user email/password login (Argon2id) plus
-   backend RBAC enforcement across CRM/Jarvis/approvals/integration
-   administration, behind `LEADLENS_V2_AUTH_ENABLED` (**defaults
-   OFF**) — see "V2 migration" below) but the scheduler's live check
-   logic, CRM reads, and every integration adapter's env-vs-tenant
-   credential choice remain legacy/opt-in exactly as before, and —
-   critically — `LEADLENS_V2_AUTH_ENABLED` defaulting OFF means the
-   **historical shared-password login remains the actual production
-   gate** until an operator explicitly cuts over (see
-   `docs/V2_PHASE7_AUTH_CUTOVER.md`'s runbook); none of these phases
-   change the multi-tenant gap itself — there is still no live
-   multi-organization production deployment and no organization
-   switcher beyond Phase 7's minimal picker; RBAC enforcement now
-   exists and is tested, but sits dormant in every live deployment
-   until `LEADLENS_V2_AUTH_ENABLED` is explicitly turned on.
+   `LEADLENS_INTEGRATION_ENV_FALLBACK_ENABLED` (**defaults OFF**), a
+   real per-user email/password login (Argon2id) plus backend RBAC
+   enforcement across CRM/Jarvis/approvals/integration administration,
+   behind `LEADLENS_V2_AUTH_ENABLED` (**defaults OFF**), and — Phase 8 —
+   an explicit organization-provisioning CLI plus genuine
+   organization-scoped CRM, Jarvis memory, settings, and audit-event
+   storage (previously all resolved to the single transitional default
+   organization no matter who was logged in, a gap Phase 8's own audit
+   found and fixed), each behind its own independently-defaulted-OFF
+   flag — see "V2 migration" below) but the scheduler's live check
+   logic (per-organization *enumeration* now works when opted in;
+   per-organization *execution content* inside the 14 check functions
+   themselves does not yet), CRM reads/writes, Jarvis memory, settings,
+   and audit events all remain legacy/opt-in exactly as before whenever
+   their respective Phase 8 flag is off, and — critically —
+   `LEADLENS_V2_AUTH_ENABLED` defaulting OFF means the **historical
+   shared-password login remains the actual production gate** until an
+   operator explicitly cuts over (see `docs/V2_PHASE7_AUTH_CUTOVER.md`'s
+   runbook); a genuine second organization can now be provisioned and
+   validated end-to-end (see `docs/V2_PHASE8_SAAS_ONBOARDING.md`), but
+   there is still no *live production* multi-organization deployment —
+   every Phase 8 flag defaults off — and no organization switcher beyond
+   Phase 7's minimal picker; RBAC enforcement now exists and is tested,
+   but sits dormant in every live deployment until `LEADLENS_V2_AUTH_ENABLED`
+   is explicitly turned on.
 2. **Jarvis's personality hasn't been deliberately written yet.** The
    "best friend, only thinks about your business" character is a real
    design target that likely isn't reflected yet in the actual prompting
@@ -278,9 +287,87 @@ wrongly reject a token minted in the same wall-clock second as a prior
 logout; fixed by using full-precision timestamps on both sides
 (`float()`-parsed, backward compatible with old integer-string tokens).
 See `docs/V2_PHASE7_AUTH_CUTOVER.md`'s Phase 7.1.1 addendum and
-`tests/test_phase7_1_1_hardening.py`. Every other live file — the
-scheduler's check functions themselves, the approval/execution
-engine's actual decision logic, the adapters' API-calling logic — is
+`tests/test_phase7_1_1_hardening.py`. **Phase 8 — SaaS organization
+onboarding + genuine two-organization validation** — the first phase to
+make more than one organization actually *usable* in a live deployment,
+not just representable in the schema. Its central finding: several
+subsystems that looked tenant-ready from their Phase 0/5 relational
+schema resolved organization via `resolve_default_organization_id()` —
+the single transitional bootstrap org — *regardless of who was actually
+logged in*, so a second organization's data would have silently landed
+in (or read from) the first organization's rows. Fixed, each behind its
+own independently-defaulted-OFF flag exactly like every prior phase:
+`services/clinic_data_service.py`'s CRM reads AND writes (previously
+writes only ever touched `core/memory.py`'s single global JSON list, so
+two organizations could not even both use external id `"P-001"` — now,
+behind `LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED`, both read and
+write route through `core/db/models/clinic.py`'s relational tables via
+the live session's real organization, with `services/crm_tenant_writer.py`
+as the new write path reusing `services/relational_sync_service.py`'s
+existing per-entity mappers); `services/jarvis_memory.py` (behind
+`LEADLENS_V2_JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED` — also stops a
+non-default organization from ever falling back to the shared legacy
+JSON file, which has always belonged to the default organization alone);
+`services/tenant_operational_sync.py`'s audit-event shadow-sync (now
+prefers the live session's organization when `LEADLENS_V2_TENANT_CONTEXT_ENABLED`
+is on, previously always the transitional default regardless); and
+company/clinic settings, which move off `core/memory.py`'s single global
+`company` dict onto Phase 0's previously-dormant `OrganizationSettings`
+table via new `core/identity/organization_profile_service.py`, behind
+`LEADLENS_V2_ORG_SCOPED_SETTINGS_ENABLED` — `app.py` now routes
+onboarding through the new `services.platform_data.company_setup_complete()`,
+which is organization-scoped under that flag instead of the old global
+`core.memory.company_exists()`. All four resolvers share one new,
+reused primitive: `core/identity/live_organization.py`'s
+`resolve_live_organization_id()` (prefers the live authenticated
+session's organization, falls back to the transitional default for
+scripts/scheduler/no-session calls — never a caller-supplied id from
+untrusted input). Also new: `scripts/provision_organization.py` (the
+explicit, operator-only, idempotent CLI that creates an
+Organization + initial OWNER User + Membership — deliberately separate
+from the Phase 1 RBAC model; an OWNER of Clinic A cannot use it to
+create Clinic B), `scripts/verify_multi_org_readiness.py` (a safe,
+read-only multi-org status/isolation report, never patient-sensitive
+data), an `OrganizationSettings.automations_enabled` column (new
+organizations default to automations OFF), and
+`scheduler/run_scheduled_checks.py::resolve_scheduler_organizations()`
+now genuinely enumerates every ACTIVE organization with automations
+explicitly enabled when `LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED` is on
+(off: unchanged single-org behavior). **Phase 8.1** (a hardening pass
+fixing two defects an independent Phase 8 audit found) closed both: a
+live cross-tenant audit leak (`services/security_service.py`'s
+`audit_rows()` — the actual "Settings > Data protection" reader — always
+read the single legacy global `security_audit_log` section, so
+Organization B could see Organization A's audit events despite the
+relational `SecurityAuditEvent` shadow table already being correctly
+organization-scoped; fixed behind a new, independent
+`LEADLENS_V2_AUDIT_TENANT_AUTHORITATIVE_ENABLED` flag, defaults OFF —
+`audit_event()`'s write path is unchanged, only the read becomes
+organization-scoped), and the scheduler execution-content gap just
+described — every one of the 14 check functions (plus
+`raise_owner_alert()`/`queue_patient_action()` and the idempotency
+ledger) now accepts an optional `context: TenantContext | None = None`,
+and `run_all_checks()` builds one `TenantContext` per enumerated
+organization and runs every check once per organization with it when
+multi-org mode is on (off: unchanged, every check still runs once with
+`context=None`). Phase 8.1 also added a minimal, fail-open guard to
+`marketing-site/api/lead.py` (refuses to write if more than one
+organization exists in the target database) and reconfirmed — see
+`docs/V2_PHASE8_SAAS_ONBOARDING.md`'s Phase 8.1 addendum — that this
+endpoint remains genuinely unsupported for shared multi-org public lead
+ingestion; not redesigned. One known remaining gap, explicitly
+documented rather than silently fixed: `appointment_reminder()`'s 24hr
+auto-send branch still resolves its WhatsApp send implicitly, not
+per-organization. See that doc for the full Phase 8 design, the
+second-clinic validation procedure, `tests/test_phase8_saas_onboarding.py`
+(24 tests, including one end-to-end two-organization scenario with
+deliberately overlapping external ids), and
+`tests/test_phase8_1_hardening.py` (17 tests, including an A→B→A
+scheduler-interleaving test and the exact cross-tenant audit scenario
+the Phase 8 audit reproduced). Every other live file — the approval/
+execution engine's actual decision logic, the adapters' API-calling
+logic, the scheduler check functions' own qualification/business logic
+(only their organization threading changed, per Phase 8.1 above) — is
 still completely untouched. See `docs/V2_COEXISTENCE.md` for Phase 0's
 architecture, `docs/V2_PHASE1_IDENTITY.md` for Phase 1's (including the
 full role → permission matrix), `docs/V2_PHASE2_JARVIS_MEMORY.md` for
@@ -292,9 +379,12 @@ entity-by-entity production activation runbook),
 `docs/V2_PHASE5_TENANT_BUSINESS_LOGIC.md` for Phase 5's,
 `docs/V2_PHASE6_INTEGRATION_CREDENTIALS.md` for Phase 6's (including the
 full integration credential audit and the provider-by-provider
-production migration procedure), and `docs/V2_PHASE7_AUTH_CUTOVER.md`
-for Phase 7's. Every phase's rollback is the same shape — an env-var
-kill switch, no destructive DB changes needed.
+production migration procedure), `docs/V2_PHASE7_AUTH_CUTOVER.md`
+for Phase 7's, and `docs/V2_PHASE8_SAAS_ONBOARDING.md` for Phase 8's
+(including the platform-provisioning-vs-organization-RBAC distinction
+and the full second-clinic manual validation procedure). Every phase's
+rollback is the same shape — an env-var kill switch, no destructive DB
+changes needed.
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
@@ -325,7 +415,28 @@ environment/secrets only), do not build password-reset/email flows,
 SSO, social login, a full SaaS organization switcher, or an invitation-
 email system — none of that is started; do not remove the legacy
 shared-password path from `core/auth.py` — it remains the rollback
-target for as long as any deployment might need it.
+target for as long as any deployment might need it. Phase 8 adds: do
+not enable `LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED`,
+`LEADLENS_V2_ORG_SCOPED_SETTINGS_ENABLED`,
+`LEADLENS_V2_JARVIS_MEMORY_TENANT_AUTHORITATIVE_ENABLED`,
+`LEADLENS_V2_SCHEDULER_MULTI_ORG_ENABLED`, or (Phase 8.1)
+`LEADLENS_V2_AUDIT_TENANT_AUTHORITATIVE_ENABLED` in code (deployment
+environment/secrets only, following every prior phase's rollout
+discipline — see `docs/V2_PHASE8_SAAS_ONBOARDING.md`'s validation
+procedure before ever turning these on against a real database); do not
+run `scripts/provision_organization.py` automatically, on startup, or
+from any Streamlit code path — it is an explicit, human-typed operator
+command only; do not build public self-signup, billing, a broad
+invitation-email system, or a full organization switcher UI — none of
+that is started. Phase 8.1's scheduler-check `context` parameter and
+`marketing-site/api/lead.py`'s ambiguous-multi-org guard were both
+explicit, discussed, minimal changes (see
+`docs/V2_PHASE8_SAAS_ONBOARDING.md`'s Phase 8.1 addendum) — do not
+treat that as license to keep expanding either surface without a
+similarly explicit ask: do not redesign the marketing-site public API
+further, and do not thread organization context into
+`services/appointment_messaging.py`'s auto-send credential resolution
+(the one remaining documented gap) without discussing it first.
 
 ## Automation roadmap
 
