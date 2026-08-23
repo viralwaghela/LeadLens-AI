@@ -37,8 +37,9 @@ and its Phase 9.1 / 9.1.1 addenda for the full audit trail.
 Small service businesses — physiotherapy clinics, wellness studios,
 single-practitioner practices — run on the same repetitive operational
 work: chasing no-shows, reminding patients about appointments, flagging
-lapsed patients, watching for slow weeks, following up on leads. None of
-that requires human judgment; all of it eats the owner's attention.
+lapsed patients, watching for slow weeks, following up on leads. Much of
+that work is repetitive and rules-driven, yet consumes significant owner
+attention.
 
 **Jarvis is the product.** He is an AI Chief of Staff who has a team of
 specialist agents of his own, reasons over the business's real data, and
@@ -48,9 +49,9 @@ packages, payments, therapists — is the operational substrate Jarvis
 needs in order to actually do things for the business, not a product in
 its own right.
 
-LeadLens started as a single-clinic pilot built for **Beyond Pain**
-(Malad, Mumbai) — the founder's own physiotherapy clinic, and still the
-project's real-world proving ground. It has since been migrated,
+LeadLens was built and tested with **Beyond Pain** (Malad, Mumbai), a
+real physiotherapy/wellness clinic, and it remains the project's
+real-world proving ground. It has since been migrated,
 incrementally and behind feature flags, into a multi-tenant SaaS
 foundation: one application and one relational database capable of
 serving many independent clinics, each with isolated data, credentials,
@@ -72,7 +73,7 @@ operational record a clinic runs on.
 ### Jarvis Workspace
 
 Mission Control, Patient Intelligence, the AI team (specialist agents
-synthesized into one voice), autonomous workflows, integrations, an
+synthesized into one voice), automation workflows, integrations, an
 approval queue, and business memory (Data Hub / Reports / Memory
 Center).
 
@@ -224,11 +225,11 @@ the last active OWNER cannot be disabled or demoted.
 
 ## Jarvis
 
-Jarvis reasons over a **privacy-filtered, grounded view of the real
-business** (`services/jarvis_context.py`) — patient names, contact
-details, and clinical notes are excluded from the LLM context; the model
-receives aggregate business signals only. He never invents facts about
-the business he's reasoning over.
+Jarvis is designed to minimize unsupported claims by reasoning over a
+**privacy-filtered, grounded view of the clinic's real operational
+data** (`services/jarvis_context.py`) — patient names, contact details,
+and clinical notes are excluded from the LLM context; the model
+receives aggregate business signals only.
 
 A request is routed to one or more **specialist agents**
 (`services/specialist_orchestration.py`, `services/agent_router.py`) —
@@ -379,9 +380,24 @@ implemented and tested:
 - **Repair / resync** (`scripts/repair_v2_crm.py`) — reconciles drift
   between the two stores.
 
-The legacy `memory_store` (`core/memory.py`) is **not** the CRM's sole
-current source of truth — it remains the default-off fallback and the
-rollback target, not the only implementation.
+The CRM currently runs in one of two modes, selected by
+`LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED`:
+
+- **Legacy compatibility mode** (flag off, the current default) — the
+  historical `memory_store` write path (`core/memory.py`) remains
+  authoritative for both reads and writes; the relational schema is kept
+  in sync underneath it via dual-write, but is not yet the system of
+  record.
+- **V2 tenant-authoritative mode** (flag on) — the relational,
+  organization-scoped CRM tables (`core/db/models/clinic.py`, via
+  `services/crm_tenant_writer.py` and `services/crm_read_router.py`)
+  become authoritative for both reads and writes, replacing the single
+  global `memory_store` list with genuinely per-organization storage.
+
+Either way, the legacy `memory_store` is **not** the CRM's sole possible
+source of truth — it is today's default mode and the rollback target,
+with the relational, tenant-authoritative path built, tested, and
+available as the forward path once a deployment turns the flag on.
 
 ---
 
