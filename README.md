@@ -708,7 +708,7 @@ scheduler/          14 tenant-aware background automation checks
 scripts/            Migration, backfill, repair, verify, backup/restore,
                     health/readiness, and organization-provisioning tools
 alembic/            Relational schema migrations
-workflows/          Autonomous workflow definitions
+workflows/          Automation workflow definitions
 marketing-site/     Static public marketing site + lead-capture endpoint
 database/           Local SQLite file and JSON fallbacks (gitignored)
 data/               Runtime data: security audit log, collaboration, learning
