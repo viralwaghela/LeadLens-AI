@@ -126,6 +126,29 @@ feature in its own right.
   surfaced by those tests were fixed along the way (in
   `services/learning_memory_v22.py` and
   `services/agent_collaboration_v23.py`).
+- **DEPLOYMENT FIX (2026-09-26, `client-1`, commit `4a033df`) — DONE.**
+  The live Streamlit Cloud deployment (`beyondpainjarvis.streamlit.app`)
+  threw `ModuleNotFoundError: No module named 'psycopg'` the moment
+  Jarvis tried to load DB-backed learning memory
+  (`ui/jarvis_mode.py` → `services/business_jarvis_engine.py` →
+  `services/jarvis_context.py` → `services/jarvis_memory.py` →
+  `core/db/session.py::make_engine()`). Root cause: that deployment's
+  `DATABASE_URL`/`LEADLENS_V2_DATABASE_URL` secret uses the
+  `postgresql+psycopg://` scheme (the actively-maintained psycopg v3
+  driver), but `requirements.txt` only ever installed `psycopg2-binary`
+  — `psycopg` (v3) was never a dependency. Not a Python-3.14
+  incompatibility (`psycopg2-binary` itself works fine on 3.14, which is
+  why `core/memory.py`'s separate, direct `psycopg2` connection was
+  never affected). Fixed by adding `psycopg[binary]>=3.2,<4` to
+  `requirements.txt` alongside the existing `psycopg2-binary` pin — pure
+  addition, no code/architecture/credential change. Verified against the
+  live deployment post-redeploy: Mission Control reports "Jarvis loaded
+  9 of 9 data sources, LIVE DATA CONNECTED" and Memory Center loads real
+  data, both via the exact call path that previously crashed. This fix
+  was applied directly to `client-1` only (the branch that deployment
+  actually tracks) — `master` does not yet have it; apply the same
+  `requirements.txt` addition there separately if `master` is ever
+  deployed on its own.
 
 ## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`, `services/crm_read_router.py`, `services/tenant_operational_sync.py`, `services/integration_credentials.py`, `services/credential_encryption.py`, `integrations/*.py`)
 
