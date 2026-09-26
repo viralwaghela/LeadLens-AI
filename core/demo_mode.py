@@ -63,8 +63,41 @@ class DemoUsageCapReached(DemoModeError):
         super().__init__("llm", DEMO_USAGE_CAP_MESSAGE)
 
 
+def _truthy(value: object) -> bool:
+    return str(value).strip().lower() in _TRUE  # "1", 1, True, "true", "yes"
+
+
+def _top_level_secrets() -> dict:
+    """Top-level Streamlit secrets as a plain dict; {} when there is no secrets store.
+    Streamlit only copies top-level str/int/float secrets into os.environ - a TOML
+    boolean (LEADLENS_DEMO_MODE = true) is NOT copied, which is why os.environ alone is
+    not enough on Streamlit Cloud."""
+    try:
+        import streamlit as st
+
+        return {k: v for k, v in dict(st.secrets).items() if not isinstance(v, (dict, list))}
+    except Exception:  # noqa: BLE001 - no secrets file / not running under Streamlit
+        return {}
+
+
+def _promote_secrets_to_environment(secrets: dict) -> None:
+    """Demo deployments only: make every top-level scalar secret visible to the code that
+    reads os.environ (the other LEADLENS_* flags are booleans too). Never overrides a value
+    already in the environment, and never runs unless demo mode was switched on."""
+    for key, value in secrets.items():
+        if key not in os.environ and isinstance(value, (str, int, float, bool)):
+            os.environ[key] = ("1" if value else "0") if isinstance(value, bool) else str(value)
+
+
 def demo_mode_enabled() -> bool:
-    return os.getenv("LEADLENS_DEMO_MODE", "").strip().lower() in _TRUE
+    if _truthy(os.getenv("LEADLENS_DEMO_MODE", "")):
+        return True
+    secrets = _top_level_secrets()
+    if _truthy(secrets.get("LEADLENS_DEMO_MODE", "")):
+        _promote_secrets_to_environment(secrets)
+        os.environ["LEADLENS_DEMO_MODE"] = "1"
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

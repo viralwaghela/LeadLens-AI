@@ -1,7 +1,12 @@
 import streamlit as st
 
-from core.auth import require_login
+# Must run before any other app import: on a demo deployment it makes boolean Streamlit
+# secrets visible as environment variables (see core/demo_mode.py). Inert everywhere else.
 from core.demo_mode import DEMO_DISABLED_MESSAGE, DEMO_ERROR_MESSAGE, DemoModeError, demo_mode_enabled
+
+demo_mode_enabled()
+
+from core.auth import require_login
 from dashboard import show_dashboard
 from onboarding import show_onboarding
 from services.platform_data import company_setup_complete
@@ -12,6 +17,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+from core.demo_diagnostics import render_demo_diagnostics
+
+render_demo_diagnostics()
 
 if demo_mode_enabled():
     # Public demo deployment (docs/V2_DEMO_ENVIRONMENT.md): a server-side,

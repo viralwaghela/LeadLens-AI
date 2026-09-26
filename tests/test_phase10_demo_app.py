@@ -21,6 +21,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from unittest import mock
 from sqlalchemy.orm import Session
 from streamlit.testing.v1 import AppTest
 
@@ -458,3 +459,96 @@ def test_without_demo_mode_the_normal_login_gate_is_unchanged(demo_app, monkeypa
     assert not [b for b in at.button if b.key == "demo_enter_btn"]  # no demo entry exists
     text = _texts(at) + _all_text(at)
     assert BANNER not in text and DEMO_ORG_NAME not in text
+
+
+# ---------------------------------------------------------------------------
+# Demo-mode detection (Streamlit Cloud only copies str/int/float secrets to os.environ)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", ["1", 1, True, "true", "True", "yes", " YES "])
+def test_demo_mode_accepts_every_reasonable_spelling_from_the_environment(monkeypatch, value):
+    from core.demo_mode import demo_mode_enabled
+
+    monkeypatch.setenv("LEADLENS_DEMO_MODE", str(value))
+    assert demo_mode_enabled()
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "2", "demo"])
+def test_demo_mode_rejects_everything_else(monkeypatch, value):
+    import core.demo_mode as dm
+
+    monkeypatch.setenv("LEADLENS_DEMO_MODE", value)
+    monkeypatch.setattr(dm, "_top_level_secrets", lambda: {})
+    assert not dm.demo_mode_enabled()
+
+
+@pytest.mark.parametrize("value", [True, 1, "1", "true", "yes"])
+def test_a_top_level_secret_that_streamlit_never_exported_to_the_environment_still_enables_demo_mode(monkeypatch, value):
+    """The deployment bug: `LEADLENS_DEMO_MODE = true` (a TOML boolean) is not copied to os.environ."""
+    import os
+
+    import core.demo_mode as dm
+
+    monkeypatch.delenv("LEADLENS_DEMO_MODE", raising=False)
+    monkeypatch.delenv("LEADLENS_V2_AUTH_ENABLED", raising=False)
+    monkeypatch.setattr(dm, "_top_level_secrets", lambda: {"LEADLENS_DEMO_MODE": value, "LEADLENS_V2_AUTH_ENABLED": True})
+    with mock.patch.dict(os.environ):
+        assert dm.demo_mode_enabled()
+        assert os.environ["LEADLENS_V2_AUTH_ENABLED"] == "1"  # the sibling boolean flags are promoted too
+
+
+def test_without_the_secret_nothing_is_promoted_and_production_is_unchanged(monkeypatch):
+    import os
+
+    import core.demo_mode as dm
+
+    monkeypatch.delenv("LEADLENS_DEMO_MODE", raising=False)
+    monkeypatch.delenv("LEADLENS_V2_AUTH_ENABLED", raising=False)
+    monkeypatch.setattr(dm, "_top_level_secrets", lambda: {"LEADLENS_V2_AUTH_ENABLED": True, "SOMETHING": "x"})
+    assert not dm.demo_mode_enabled()
+    assert "LEADLENS_V2_AUTH_ENABLED" not in os.environ and "SOMETHING" not in os.environ
+
+
+def test_a_boolean_secret_alone_reaches_the_demo_workspace_and_never_the_login_form(demo_app, monkeypatch):
+    """End to end through the real app.py: env has NO demo variables, only Streamlit secrets do."""
+    import os
+
+    for name in ("LEADLENS_DEMO_MODE", "LEADLENS_V2_AUTH_ENABLED", "LEADLENS_V2_TENANT_CONTEXT_ENABLED"):
+        monkeypatch.delenv(name)
+    with mock.patch.dict(os.environ):
+        at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=90)
+        at.secrets["LEADLENS_DEMO_MODE"] = True
+        at.secrets["LEADLENS_V2_AUTH_ENABLED"] = True
+        at.secrets["LEADLENS_V2_TENANT_CONTEXT_ENABLED"] = True
+        at.run()
+        assert not at.exception, [e.message for e in at.exception]
+        assert BANNER in _texts(at)
+        assert not [t for t in at.text_input if "user id" in (t.label or "").lower() or t.label == "Password"]
+        assert at.session_state["v2_auth_session"]["role"] == "DEMO_VIEWER"
+
+
+def test_the_legacy_login_form_is_only_rendered_by_the_normal_auth_flow():
+    hits = [p for p in ROOT.rglob("*.py")
+            if "tests" not in p.parts and ".venv" not in p.parts and "Enter your User ID" in p.read_text(encoding="utf-8", errors="replace")]
+    assert [p.relative_to(ROOT).as_posix() for p in hits] == ["core/auth.py"]
+
+
+def test_normal_mode_still_renders_the_legacy_login_form(demo_app, monkeypatch):
+    monkeypatch.delenv("LEADLENS_DEMO_MODE")
+    monkeypatch.delenv("LEADLENS_V2_AUTH_ENABLED")
+    at = _new_app()
+    assert not at.exception, [e.message for e in at.exception]
+    assert "Enter your User ID" in _all_text(at) + _texts(at)
+    assert BANNER not in _texts(at)
+
+
+def test_diagnostics_are_hidden_by_default_and_never_print_secret_values(demo_app, monkeypatch):
+    at = _new_app()
+    assert "Demo diagnostics" not in _all_text(at) + _texts(at)
+    monkeypatch.setenv("LEADLENS_DEMO_DIAGNOSTICS", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-SENTINEL-DO-NOT-LEAK")
+    from core import demo_diagnostics
+
+    shown = demo_diagnostics.collect()
+    assert shown["demo mode evaluates"] == "True" and "passwordless" in shown["auth path selected"]
+    assert "SENTINEL" not in repr(shown)
