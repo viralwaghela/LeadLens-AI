@@ -471,6 +471,7 @@ def _run_cli(demo_db, monkeypatch, argv, env=None, mode="seed"):
     result = operator_cli.main(
         mode, argv, env if env is not None else {operator_cli.TARGET_ENV: PG_URL},
         out=lines.append, engine_factory=lambda url: demo_db.engine, set_environment=lambda url: None,
+        root=demo_db.tmp,
     )
     return result, "\n".join(lines)
 
@@ -499,7 +500,7 @@ def test_cli_apply_with_the_right_host_seeds_and_never_prints_credentials(demo_d
     code = operator_cli.main(
         "seed", ["--apply", "--confirm-host", "DB.demo-host.example", "--anchor", "2026-09-26"],
         {operator_cli.TARGET_ENV: PG_URL}, out=lines.append, engine_factory=lambda url: demo_db.engine,
-        set_environment=lambda url: None, seed_dir=demo_db.seed_dir,
+        set_environment=lambda url: None, seed_dir=demo_db.seed_dir, root=demo_db.tmp,
     )
     output = "\n".join(lines)
     assert code == 0, output
@@ -507,6 +508,20 @@ def test_cli_apply_with_the_right_host_seeds_and_never_prints_credentials(demo_d
     with Session(demo_db.engine) as session:
         assert session.query(Organization).filter_by(slug=DEMO_ORG_SLUG).count() == 1
     assert [_file_hash(path) for path in real_files] == before  # the repo's own seed files were never touched
+
+
+def test_cli_refuses_to_run_from_a_checkout_that_has_a_dotenv_file(demo_db, monkeypatch):
+    (demo_db.tmp / ".env").write_text("PLACEHOLDER=1\n", encoding="utf-8")  # stands in for a production .env
+    lines: list[str] = []
+    code = operator_cli.main(
+        "seed", ["--apply", "--confirm-host", "db.demo-host.example"], {operator_cli.TARGET_ENV: PG_URL},
+        out=lines.append, engine_factory=lambda url: demo_db.engine, set_environment=lambda url: None,
+        root=demo_db.tmp,
+    )
+    assert code == 2 and ".env" in " ".join(lines) and "git worktree add" in " ".join(lines)
+    with Session(demo_db.engine) as session:
+        assert session.query(Organization).count() == 0
+    assert operator_cli.dotenv_problems(demo_db.tmp / "nowhere") == []
 
 
 def test_cli_refuses_forbidden_env_bad_anchor_and_old_migrations(demo_db, monkeypatch):
@@ -519,7 +534,7 @@ def test_cli_refuses_forbidden_env_bad_anchor_and_old_migrations(demo_db, monkey
     lines: list[str] = []
     code = operator_cli.main(
         "seed", [], {operator_cli.TARGET_ENV: PG_URL}, out=lines.append,
-        engine_factory=lambda url: demo_db.engine, set_environment=lambda url: None,
+        engine_factory=lambda url: demo_db.engine, set_environment=lambda url: None, root=demo_db.tmp,
     )
     assert code == 2 and "alembic upgrade head" in " ".join(lines)
 

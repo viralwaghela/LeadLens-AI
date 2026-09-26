@@ -116,7 +116,7 @@ def test_audit_refuses_an_unseeded_database(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def test_audit_cli_applies_the_same_target_safety_as_seed_and_reset(seeded, monkeypatch):
+def test_audit_cli_applies_the_same_target_safety_as_seed_and_reset(seeded, monkeypatch, tmp_path):
     from demo import audit_cli
     from demo.operator_cli import TARGET_ENV
 
@@ -125,15 +125,27 @@ def test_audit_cli_applies_the_same_target_safety_as_seed_and_reset(seeded, monk
 
     lines: list[str] = []
     assert audit_cli.main([], {TARGET_ENV: pg("u", "SECRET-SENTINEL-AUDIT", "db.demo-host.example"),
-                               "WHATSAPP_ACCESS_TOKEN": "x"}, out=lines.append) == 2
+                               "WHATSAPP_ACCESS_TOKEN": "x"}, out=lines.append, root=tmp_path) == 2
     assert "REFUSING" in " ".join(lines) and "SECRET-SENTINEL-AUDIT" not in " ".join(lines)
 
     lines.clear()
     code = audit_cli.main(
         [], {TARGET_ENV: pg("u", "SECRET-SENTINEL-AUDIT", "db.demo-host.example")}, out=lines.append,
         engine_factory=lambda url: seeded, set_environment=lambda url: None,
-        migration_state=lambda e: ("head", "head"),
+        migration_state=lambda e: ("head", "head"), root=tmp_path,
     )
     output = "\n".join(lines)
     assert code == 0, output
     assert "DEPLOYMENT AUDIT: PASS" in output and "SECRET-SENTINEL-AUDIT" not in output
+
+
+def test_audit_cli_refuses_a_checkout_with_a_dotenv(seeded, tmp_path):
+    from demo import audit_cli
+    from demo.operator_cli import TARGET_ENV
+
+    (tmp_path / ".env").write_text("X=1\n", encoding="utf-8")
+    lines: list[str] = []
+    env = {TARGET_ENV: "postgresql://" + "u" + ":" + "pw" + "@" + "db.demo-host.example" + "/demo_db"}
+    assert audit_cli.main([], env, out=lines.append, root=tmp_path, engine_factory=lambda url: seeded,
+                          set_environment=lambda url: None) == 2
+    assert "git worktree add" in " ".join(lines)

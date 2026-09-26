@@ -14,7 +14,11 @@ import sys
 from collections.abc import Callable, Mapping
 
 from demo.audit import run_audit, summarize
-from demo.operator_cli import TARGET_ENV, _migration_state, _point_app_at, operator_environment_problems, parse_target
+from pathlib import Path
+
+from demo.operator_cli import (
+    TARGET_ENV, _migration_state, _point_app_at, dotenv_problems, operator_environment_problems, parse_target,
+)
 
 
 def main(
@@ -25,13 +29,14 @@ def main(
     engine_factory: Callable[[str], object] | None = None,
     set_environment: Callable[[str], None] | None = None,
     migration_state=None,
+    root: Path | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Attack the demo deployment and report PASS/FAIL.")
     parser.add_argument("--live-llm", action="store_true", help="also make one tiny real OpenAI call through the limiter")
     args = parser.parse_args(argv)
     env = os.environ if env is None else env
 
-    problems = operator_environment_problems(env)
+    problems = dotenv_problems(root) + operator_environment_problems(env)
     if problems:
         for problem in problems:
             out(f"REFUSING: {problem}")

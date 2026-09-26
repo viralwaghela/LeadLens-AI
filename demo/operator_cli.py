@@ -60,6 +60,21 @@ def parse_target(url: str) -> Target:
     return Target(host=parsed.host, database=parsed.database or "")
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def dotenv_problems(root: Path | None = None) -> list[str]:
+    """A .env in this checkout may hold PRODUCTION values, and several app modules call
+    load_dotenv() on import (services/ai.py, ...), which would quietly load them into an
+    operator process. Refuse to run from such a checkout: use a clean git worktree."""
+    if ((root or REPO_ROOT) / ".env").exists():
+        return [
+            "a .env file exists in this checkout (it may hold production values and app modules auto-load it). "
+            "Run from a clean checkout: git worktree add ../LeadLens-demo-ops <demo-branch>"
+        ]
+    return []
+
+
 def operator_environment_problems(env: Mapping[str, str]) -> list[str]:
     """Problems with the operator's shell — names only, never values."""
     problems: list[str] = []
@@ -105,6 +120,7 @@ def main(
     engine_factory: Callable[[str], object] | None = None,
     set_environment: Callable[[str], None] | None = None,
     seed_dir: Path | None = None,
+    root: Path | None = None,
 ) -> int:
     """`engine_factory`, `set_environment` and `seed_dir` exist so tests can
     run the real flow against a throwaway database and directory."""
@@ -119,7 +135,7 @@ def main(
     parser.add_argument("--anchor", default="", help="YYYY-MM-DD date the data is anchored to (default: today)")
     args = parser.parse_args(argv)
 
-    problems = operator_environment_problems(env)
+    problems = dotenv_problems(root) + operator_environment_problems(env)
     if problems:
         for problem in problems:
             out(f"REFUSING: {problem}")
