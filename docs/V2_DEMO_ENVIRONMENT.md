@@ -121,6 +121,20 @@ git push origin demo
 - [ ] From a clean shell with the *demo* variables only, `python scripts/production_readiness.py`
   must show no FAIL (it runs the same isolation checks the app does).
 
+### 3.7 Live audit against the real deployment
+`scripts/audit_demo_deployment.py` attacks the real demo database and environment and
+prints PASS/FAIL: it tries to authenticate as the demo user, escape into another tenant,
+modify users/settings/integrations (ORM, raw SQL, DDL, the legacy store), invoke external
+actions with provider credentials *planted* in the environment, export, upload, and
+exceed the LLM caps (counted in a 1999 window and cleaned up). It refuses to attack any
+database that is not a seeded, demo-only one. Keep the operator values in a git-ignored
+`.env.demo` (never `.env`, never committed).
+
+```bash
+python scripts/audit_demo_deployment.py              # everything except a real OpenAI call
+python scripts/audit_demo_deployment.py --live-llm   # also one tiny real call through the limiter
+```
+
 ### Secrets / environment variables for the demo app
 
 | Name | Value | Notes |

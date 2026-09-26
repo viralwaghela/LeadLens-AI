@@ -27,3 +27,4 @@ database/backups/
 *.db
 *.db-wal
 *.db-shm
+.env.demo
