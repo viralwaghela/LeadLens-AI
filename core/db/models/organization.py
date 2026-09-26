@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import Enum, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Enum, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
@@ -65,9 +65,16 @@ class OrganizationSettings(OrgScopedMixin, TimestampMixin, Base):
     location: Mapped[str | None] = mapped_column(String(200))
     website: Mapped[str | None] = mapped_column(String(300))
     google_review_link: Mapped[str | None] = mapped_column(String(500))
-    monthly_revenue: Mapped[float | None] = mapped_column()
-    monthly_expenses: Mapped[float | None] = mapped_column()
-    target_monthly_revenue: Mapped[float | None] = mapped_column()
+    # Explicit Float, not annotation-inferred: SQLAlchemy 2.1 changed a bare
+    # `Mapped[float]` from Float to Double, which made `alembic check` report
+    # FLOAT() -> Double() drift against the Phase 0 migration (which created
+    # these as sa.Float()) on any install resolving SQLAlchemy >= 2.1. Pinning
+    # the type keeps the model identical to the migrated schema on 2.0 and
+    # 2.1 alike, with no migration. On PostgreSQL FLOAT (no precision) is
+    # already double precision, so nothing changes physically there.
+    monthly_revenue: Mapped[float | None] = mapped_column(Float)
+    monthly_expenses: Mapped[float | None] = mapped_column(Float)
+    target_monthly_revenue: Mapped[float | None] = mapped_column(Float)
     extra: Mapped[str | None] = mapped_column(Text)  # JSON-encoded catch-all
 
     # Phase 8: whether scheduler/outbound automations run for this
