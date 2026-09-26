@@ -6,15 +6,24 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from core.demo_mode import demo_mode_enabled, demo_seed_path
 from services.business_jarvis_engine import build_business_context
 from services.learning_memory_v22 import recommendation_context
 
 ROOT = Path(__file__).resolve().parents[1]
-STORE = ROOT / "data" / "collaboration" / "council_sessions.json"
+STORE = (
+    demo_seed_path("council_sessions.json")  # public demo: synthetic, read-only
+    if demo_mode_enabled()
+    else ROOT / "data" / "collaboration" / "council_sessions.json"
+)
 STORE.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _save_session(session: dict[str, Any]) -> None:
+    if demo_mode_enabled():
+        # Public demo: the visitor still sees their council result on screen,
+        # but nothing is persisted (the seed history is read-only).
+        return
     try:
         rows = json.loads(STORE.read_text(encoding="utf-8")) if STORE.exists() else []
     except (OSError, json.JSONDecodeError):

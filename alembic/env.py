@@ -31,6 +31,7 @@ load_dotenv()
 import core.db.models  # noqa: E402,F401 (populates Base.metadata as a side effect)
 from core.db.base import Base  # noqa: E402
 from core.db.session import get_database_url  # noqa: E402
+from core.demo_mode import allow_demo_writes  # noqa: E402
 
 config = context.config
 
@@ -57,7 +58,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
-    with context.begin_transaction():
+    with allow_demo_writes(), context.begin_transaction():
         context.run_migrations()
 
 
@@ -67,7 +68,10 @@ def run_migrations_online() -> None:
     connectable = make_engine(_database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
+        # Migrating a demo database is an operator action, so it is allowed
+        # to write even if LEADLENS_DEMO_MODE happens to be set in this
+        # shell (core/db/demo_guard.py would otherwise refuse the DDL).
+        with allow_demo_writes(), context.begin_transaction():
             context.run_migrations()
 
 

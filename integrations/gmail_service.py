@@ -7,6 +7,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
+from core.demo_mode import assert_external_action_allowed, demo_mode_enabled
 from integrations.base import IntegrationResult
 
 
@@ -31,6 +32,12 @@ class GmailService:
         has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
         configured = bool(has_credential_source and self.delegated_user)
         self.dry_run = (not configured) if dry_run is None else dry_run
+        if demo_mode_enabled():
+            # Public demo: never hold or use a real credential, never go live.
+            self.credentials_json = ""
+            self.credentials_path = ""
+            self.delegated_user = ""
+            self.dry_run = True
 
     def _service_account_credentials(self, scopes: list[str]):
         from google.oauth2 import service_account
@@ -74,6 +81,7 @@ class GmailService:
 
     def _execute(self, mode: str, payload: dict[str, Any]) -> IntegrationResult:
         try:
+            assert_external_action_allowed("gmail")  # belt and braces; dry_run is forced above
             from googleapiclient.discovery import build
 
             credentials = self._service_account_credentials(

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from core.demo_mode import assert_external_action_allowed, demo_mode_enabled
 from integrations.base import IntegrationResult
 
 
@@ -30,6 +31,11 @@ class GoogleCalendarService:
         has_credential_source = bool(self.credentials_json) or bool(self.credentials_path and Path(self.credentials_path).exists())
         configured = has_credential_source
         self.dry_run = (not configured) if dry_run is None else dry_run
+        if demo_mode_enabled():
+            # Public demo: never hold or use a real credential, never go live.
+            self.credentials_json = ""
+            self.credentials_path = ""
+            self.dry_run = True
 
     def _service_account_credentials(self, scopes: list[str]):
         from google.oauth2 import service_account
@@ -68,6 +74,7 @@ class GoogleCalendarService:
             return IntegrationResult("calendar", "create_event", True, "simulated", detail="Calendar event validated; no external event created.", payload=event)
 
         try:
+            assert_external_action_allowed("calendar")  # belt and braces; dry_run is forced above
             from googleapiclient.discovery import build
 
             credentials = self._service_account_credentials(["https://www.googleapis.com/auth/calendar"])

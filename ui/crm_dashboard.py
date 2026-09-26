@@ -8,11 +8,14 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from core.demo_mode import assert_export_allowed
 from core.memory import load_company
 from services.clinic_data_service import clinic_metrics, list_records, patient_risk_summary, records_with_patient_names
+from ui.demo_gate import guarded_download_button
 
 
 def _csv_bytes(rows: list[dict]) -> bytes:
+    assert_export_allowed("csv export")  # public-demo guard: refuses server-side, not just in the UI
     if not rows:
         return b""
     fields = sorted({key for row in rows for key in row})
@@ -94,6 +97,9 @@ def show_crm_dashboard() -> None:
         downloads=[("Patients","patients","patients.csv"),("Appointments","appointments","appointments.csv"),("Care progress","progress_notes","care_progress.csv"),("Treatment plans","packages","treatment_plans.csv"),("Payments","payments","payments.csv")]
         columns=st.columns(len(downloads))
         for column,(label,entity,filename) in zip(columns,downloads):
-            with column: st.download_button(label,data=_csv_bytes(list_records(entity)),file_name=filename,mime="text/csv",use_container_width=True)
-        complete={e:list_records(e,include_archived=True) for e in ("patients","appointments","progress_notes","packages","payments","therapists")}
-        st.download_button("Download complete clinic backup",data=json.dumps(complete,indent=2,ensure_ascii=False).encode("utf-8"),file_name="leadlens_clinic_backup.json",mime="application/json")
+            with column: guarded_download_button(label,lambda entity=entity: _csv_bytes(list_records(entity)),file_name=filename,mime="text/csv",use_container_width=True,key=f"crm_dl_{entity}")
+        def _complete_backup() -> bytes:
+            assert_export_allowed("clinic backup export")
+            complete={e:list_records(e,include_archived=True) for e in ("patients","appointments","progress_notes","packages","payments","therapists")}
+            return json.dumps(complete,indent=2,ensure_ascii=False).encode("utf-8")
+        guarded_download_button("Download complete clinic backup",_complete_backup,file_name="leadlens_clinic_backup.json",mime="application/json",key="crm_dl_backup")

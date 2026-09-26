@@ -27,6 +27,11 @@ from typing import Iterator
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
+# Registers the public-demo write guard on the Engine class. Inert unless
+# LEADLENS_DEMO_MODE is set — see core/db/demo_guard.py. Imported here
+# because every engine in the app is created through this module.
+from core.db import demo_guard  # noqa: F401
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SQLITE_PATH = PROJECT_ROOT / "database" / "leadlens_v2.db"
 

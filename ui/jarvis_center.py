@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import streamlit as st
 
+from core.demo_mode import assert_export_allowed
 from core.memory import load_memory
 from services.briefing_engine import generate_morning_brief
 from services.campaign_engine import create_campaign, update_campaign_status
@@ -10,6 +11,7 @@ from services.execution_engine import execute_action, propose_action
 from services.integration_hub import list_integrations, save_connection
 from services.memory_engine import remember
 from services.monitoring_engine import run_monitors
+from ui.demo_gate import guarded_download_button
 
 
 def _money(v: float) -> str:
@@ -89,7 +91,11 @@ def show_jarvis_center() -> None:
                 st.markdown("**Sample captions**")
                 for item in data.get("captions", []): st.code(item)
                 st.dataframe(data.get("calendar", []), use_container_width=True, hide_index=True)
-                st.download_button("Export campaign JSON", json.dumps(campaign, indent=2), f"{campaign.get('id')}.json", "application/json", key=f"dl_{campaign.get('id')}")
+                def _campaign_export(campaign=campaign) -> str:
+                    assert_export_allowed("campaign export")
+                    return json.dumps(campaign, indent=2)
+
+                guarded_download_button("Export campaign JSON", _campaign_export, f"{campaign.get('id')}.json", "application/json", key=f"dl_{campaign.get('id')}")
                 if data.get("status") != "Active" and st.button("Queue activation for approval", key=f"activate_{campaign.get('id')}"):
                     propose_action("activate_campaign", {"campaign_id": campaign.get("id"), "department": "Marketing"}, "Medium")
                     st.success("Activation queued.")

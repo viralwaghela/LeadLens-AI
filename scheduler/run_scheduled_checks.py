@@ -56,6 +56,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from core.demo_mode import demo_mode_enabled  # noqa: E402
 from core.identity.tenant_context import TenantContext  # noqa: E402
 from core.memory import add_memory_entry, ensure_database, get_memory_section  # noqa: E402
 
@@ -1443,15 +1444,21 @@ def resolve_scheduler_organizations() -> list[int]:
     tracked technical debt (see docs/V2_PHASE8_SAAS_ONBOARDING.md's
     "technical debt" section) — do not assume multi-org scheduler
     ENUMERATION implies multi-org scheduler EXECUTION content yet."""
+    if demo_mode_enabled():
+        return []  # the public demo never runs automations
     try:
         from core.db.session import make_engine, session_scope
 
         engine = make_engine()
         with session_scope(engine) as session:
             if not _multi_org_scheduler_enabled():
+                from core.db.models.organization import Organization
                 from core.identity.tenant_context import ActorType, build_transitional_context
 
                 context = build_transitional_context(session, actor_type=ActorType.SCHEDULER)
+                org = session.get(Organization, context.organization_id)
+                if org is not None and org.is_demo:
+                    return []  # a demo organization never runs automations
                 return [context.organization_id]
 
             from core.db.models.organization import Organization, OrganizationSettings, OrganizationStatus
@@ -1461,6 +1468,7 @@ def resolve_scheduler_organizations() -> list[int]:
                 .join(OrganizationSettings, OrganizationSettings.organization_id == Organization.id)
                 .filter(
                     Organization.status == OrganizationStatus.ACTIVE,
+                    Organization.is_demo.is_(False),
                     OrganizationSettings.automations_enabled.is_(True),
                 )
                 .order_by(Organization.id.asc())
@@ -1510,6 +1518,8 @@ def run_all_checks() -> dict[str, CheckResult]:
     same implicit, transitional-default-organization path every
     pre-Phase-8.1 call used. No organization-enumeration overhead, no
     behavior change, for any deployment that hasn't opted in."""
+    if demo_mode_enabled():
+        return {}  # the public demo never runs automations, however this is reached
     organizations = resolve_scheduler_organizations()
     if not organizations:
         logger.warning("No organization resolved for this scheduler run — running checks against legacy store only.")
@@ -1567,6 +1577,9 @@ def _backend_name() -> str:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if demo_mode_enabled():
+        logger.warning("LEADLENS_DEMO_MODE is set: the scheduler never runs against a demo deployment.")
+        return 0
     ensure_database()
     logger.info("Running %d scheduled check(s) against %s backend", len(CHECKS), _backend_name())
     results = run_all_checks()

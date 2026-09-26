@@ -16,16 +16,13 @@ psycopg2-binary>=2.9,<3
 SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
 
-# Deployment fix (2026-09-26): core/db/session.py's SQLAlchemy engine
-# routes through whichever driver the DATABASE_URL/LEADLENS_V2_DATABASE_URL
-# connection string names via its scheme (e.g. "postgresql+psycopg://").
-# Some Postgres providers' current connection-string examples for
-# SQLAlchemy 2.x specify the actively-maintained psycopg (v3) driver
-# rather than psycopg2 — if that scheme is used but psycopg itself isn't
-# installed, SQLAlchemy's create_engine() fails with
-# "ModuleNotFoundError: No module named 'psycopg'". This does not replace
-# psycopg2-binary above, which core/memory.py's separate legacy
-# connection still uses directly and unconditionally.
+# Deployment fix (2026-09-26): SQLAlchemy 2.1 changed the default driver for a
+# plain postgresql:// URL from psycopg2 to psycopg (v3). requirements.txt allows
+# SQLAlchemy>=2.0,<3, so a fresh install (Streamlit Cloud) resolves 2.1.x, and
+# create_engine() then fails with "ModuleNotFoundError: No module named 'psycopg'"
+# unless psycopg is installed. psycopg2-binary above stays: core/memory.py's
+# separate legacy connection uses it directly, and it cannot parse a
+# driver-qualified URL, so DATABASE_URL must stay a plain postgresql:// URL.
 psycopg[binary]>=3.2,<4
 
 # V2 Phase 1: identity/authorization backend (core/identity/). Argon2id

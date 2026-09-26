@@ -1,0 +1,102 @@
+{
+  "schema_version": 3,
+  "preferences": [],
+  "recommendations": [
+    {
+      "id": "REC-8F1477B5C3",
+      "question": "How can we improve rebooking for lapsed patients?",
+      "recommendation": "Send a friendly WhatsApp check-in to patients unseen for 50+ days, after owner approval.",
+      "agents": [
+        "Marketing Agent",
+        "Sales Agent"
+      ],
+      "tags": [
+        "rebooking",
+        "retention"
+      ],
+      "status": "measured",
+      "fingerprint": "2281bdcfd4786b9f",
+      "created_at": "2026-09-27T00:22:27",
+      "updated_at": "2026-09-27T00:22:27",
+      "latest_result": "successful"
+    },
+    {
+      "id": "REC-0C6BCBCEC1",
+      "question": "How do we fill weekday afternoon gaps?",
+      "recommendation": "Offer a discounted 30-minute follow-up slot between 14:00 and 16:00.",
+      "agents": [
+        "Operations Agent"
+      ],
+      "tags": [
+        "capacity"
+      ],
+      "status": "measured",
+      "fingerprint": "8d85315194a0dc92",
+      "created_at": "2026-09-27T00:22:27",
+      "updated_at": "2026-09-27T00:22:27",
+      "latest_result": "partial"
+    },
+    {
+      "id": "REC-18921D9A02",
+      "question": "Should we add a corporate wellness package?",
+      "recommendation": "Yes — package a monthly on-site session for teams of 10 to 25 people.",
+      "agents": [
+        "Finance Agent",
+        "Sales Agent"
+      ],
+      "tags": [
+        "corporate",
+        "growth"
+      ],
+      "status": "tracked",
+      "fingerprint": "67bde9020823de82",
+      "created_at": "2026-09-27T00:22:27",
+      "updated_at": "2026-09-27T00:22:27"
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "OUT-9FAC89B514",
+      "recommendation_id": "REC-8F1477B5C3",
+      "action_type": "rebooking",
+      "result": "successful",
+      "action_taken": "Sent 12 approved check-ins",
+      "metrics": {
+        "contacted": 12,
+        "rebooked": 5
+      },
+      "notes": "About four in ten responded.",
+      "recorded_at": "2026-09-27T00:22:27"
+    },
+    {
+      "id": "OUT-269A60746F",
+      "recommendation_id": "REC-0C6BCBCEC1",
+      "action_type": "capacity",
+      "result": "partial",
+      "action_taken": "Trialled for one week",
+      "metrics": {
+        "slots_filled": 3
+      },
+      "notes": "Helpful, but demand was uneven.",
+      "recorded_at": "2026-09-27T00:22:27"
+    }
+  ],
+  "executions": [],
+  "patterns": [
+    {
+      "action_type": "rebooking",
+      "measured_runs": 1,
+      "success_rate_percent": 100.0,
+      "confidence": "Low",
+      "last_measured_at": "2026-09-27T00:22:27"
+    },
+    {
+      "action_type": "capacity",
+      "measured_runs": 1,
+      "success_rate_percent": 50.0,
+      "confidence": "Low",
+      "last_measured_at": "2026-09-27T00:22:27"
+    }
+  ],
+  "updated_at": "2026-09-27T00:22:27"
+}

@@ -133,14 +133,15 @@ feature in its own right.
   moment Jarvis tried to load DB-backed learning memory
   (`ui/jarvis_mode.py` → `services/business_jarvis_engine.py` →
   `services/jarvis_context.py` → `services/jarvis_memory.py` →
-  `core/db/session.py::make_engine()`). Root cause: that deployment's
-  `DATABASE_URL`/`LEADLENS_V2_DATABASE_URL` secret uses the
-  `postgresql+psycopg://` scheme (the actively-maintained psycopg v3
-  driver), but `requirements.txt` only ever installed `psycopg2-binary`
-  — `psycopg` (v3) was never a dependency. Not a Python-3.14
-  incompatibility (`psycopg2-binary` itself works fine on 3.14, which is
-  why `core/memory.py`'s separate, direct `psycopg2` connection was
-  never affected). Fixed by adding `psycopg[binary]>=3.2,<4` to
+  `core/db/session.py::make_engine()`). Root cause (corrected 2026-09-27 — an earlier version of this note wrongly blamed a
+  `postgresql+psycopg://` scheme in the deployment secret; that is impossible, since
+  `core/memory.py` hands `DATABASE_URL` to raw `psycopg2`, which cannot parse a
+  driver-qualified URL): **SQLAlchemy 2.1 changed the default driver for a plain
+  `postgresql://` URL from psycopg2 to psycopg (v3)**, and `requirements.txt` allows
+  `SQLAlchemy>=2.0,<3`, so a fresh Streamlit Cloud install resolved 2.1.x while
+  only `psycopg2-binary` was installed. The same unpinned-SQLAlchemy jump caused the
+  Float/Double CI drift below. Not a Python-3.14 incompatibility (`psycopg2-binary`
+  itself works fine on 3.14). Fixed by adding `psycopg[binary]>=3.2,<4` to
   `requirements.txt` alongside the existing `psycopg2-binary` pin — pure
   addition, no code/architecture/credential change. Verified against the
   live deployment post-redeploy: Mission Control reports "Jarvis loaded
@@ -497,6 +498,26 @@ for Phase 7's, and `docs/V2_PHASE8_SAAS_ONBOARDING.md` for Phase 8's
 and the full second-clinic manual validation procedure). Every phase's
 rollback is the same shape — an env-var kill switch, no destructive DB
 changes needed.
+
+**Phase 10 — public demo environment** (branch `demo-environment`; additive, inert unless
+`LEADLENS_DEMO_MODE` is set) adds a portfolio demo that runs as a **separate deployment**
+(own Streamlit app, own PostgreSQL project, own OpenAI project, own secrets) so the public
+demo has no path to production data, keys or actions. Inside it, defense in depth, all
+server-side: `core/demo_tripwire.py` (refuses to boot on any production secret / non-plain-
+Postgres URL / non-demo organization), `core/demo_session.py` (passwordless, demo-org-only
+entry as the `DEMO_VIEWER` role — 12 read-only permissions, hard-capped for any membership in an
+`organizations.is_demo` org by `authorization_service.resolve_identity()`), `core/db/demo_guard.py`
+(one engine-level hook refusing every write/DDL; only `demo_usage` writable) plus guards at the
+legacy `core/memory.py` write executors, all three integration adapters, the credential factory,
+`execute_item()`, the scheduler, exports, uploads and file writes, and `core/demo_llm.py`
+(model pin, size caps, per-session/hourly/daily limits, fail-closed). Synthetic seed data and a
+demo-tenant-only reset live in `demo/` and `scripts/seed_demo.py` / `scripts/reset_demo.py`
+(dry-run default, typed host confirmation, refuse any non-demo organization). Migration
+`2918a71a44ce` adds `organizations.is_demo`, the `DEMO_VIEWER` enum value and `demo_usage`
+(additive; apply to production BEFORE this code reaches it). See
+`docs/V2_DEMO_ENVIRONMENT.md` for the architecture, the operator checklist, the residual-path
+analysis and the four test files. Do not build a demo path that shares a database, key or
+secret with production, and do not import `demo.seeder`/`demo.operator_cli` from app code.
 
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s

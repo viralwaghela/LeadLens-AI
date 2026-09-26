@@ -21,11 +21,11 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from core.db.models.identity import Membership, MembershipStatus, User, UserStatus
+from core.db.models.identity import Membership, MembershipRole, MembershipStatus, User, UserStatus
 from core.db.models.organization import Organization, OrganizationStatus
 from core.identity.context import AuthenticatedIdentity
 from core.identity.membership_service import get_membership_for_user_org
-from core.identity.permissions import permissions_for_role
+from core.identity.permissions import cap_permissions_for_org, permissions_for_role
 
 
 @dataclass(frozen=True)
@@ -63,12 +63,21 @@ def resolve_identity(
     if membership.status != MembershipStatus.ACTIVE:
         return AuthorizationDecision(False, "membership_disabled")
 
+    # Public-demo binding (docs/V2_DEMO_ENVIRONMENT.md). The DEMO_VIEWER role
+    # is only meaningful inside a demo organization; refuse it anywhere else
+    # so it can never be attached to a real tenant.
+    if membership.role == MembershipRole.DEMO_VIEWER and not org.is_demo:
+        return AuthorizationDecision(False, "demo_role_outside_demo_org")
+
+    # Hard, role-independent ceiling for a demo organization: whatever role
+    # the membership holds, it can never exceed the view-only demo set. A
+    # no-op for every real (non-demo) tenant.
     identity = AuthenticatedIdentity(
         user_id=user.id,
         organization_id=org.id,
         membership_id=membership.id,
         role=membership.role,
-        permissions=permissions_for_role(membership.role),
+        permissions=cap_permissions_for_org(permissions_for_role(membership.role), bool(org.is_demo)),
     )
     return AuthorizationDecision(True, "allowed", identity=identity)
 

@@ -1,0 +1,140 @@
+[
+  {
+    "id": "COUNCIL-DEMO003",
+    "created_at": "2026-09-07T10:00:00",
+    "question": "Is our therapist capacity sufficient for the next fortnight?",
+    "agents": [
+      {
+        "agent": "Sales Agent",
+        "finding": "Sales Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Finance Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "Operations Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Clinical Agent",
+        "finding": "Clinical Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      }
+    ],
+    "synthesis": {
+      "decision": "Capacity is adequate except Thursday evenings; consider one extra slot.",
+      "learning_used": "Earlier check-in campaigns re-engaged roughly four in ten lapsed patients.",
+      "management_rule": "Nothing external is sent without owner approval.",
+      "supporting_actions": [
+        "Prepare the message for approval",
+        "Review results in one week"
+      ]
+    }
+  },
+  {
+    "id": "COUNCIL-DEMO002",
+    "created_at": "2026-09-14T10:00:00",
+    "question": "How should we use next month's marketing budget?",
+    "agents": [
+      {
+        "agent": "Sales Agent",
+        "finding": "Sales Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Finance Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "Operations Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Clinical Agent",
+        "finding": "Clinical Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      }
+    ],
+    "synthesis": {
+      "decision": "Favour referrals and a corporate wellness offer over paid ads.",
+      "learning_used": "Earlier check-in campaigns re-engaged roughly four in ten lapsed patients.",
+      "management_rule": "Nothing external is sent without owner approval.",
+      "supporting_actions": [
+        "Prepare the message for approval",
+        "Review results in one week"
+      ]
+    }
+  },
+  {
+    "id": "COUNCIL-DEMO001",
+    "created_at": "2026-09-21T10:00:00",
+    "question": "Which patients should we contact this week?",
+    "agents": [
+      {
+        "agent": "Sales Agent",
+        "finding": "Sales Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Marketing Agent",
+        "finding": "Marketing Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Finance Agent",
+        "finding": "Finance Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Operations Agent",
+        "finding": "Operations Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      },
+      {
+        "agent": "Clinical Agent",
+        "finding": "Clinical Agent: the supplied clinic data supports this direction.",
+        "recommendation": "Proceed in small steps and measure the result.",
+        "risk": "Low"
+      }
+    ],
+    "synthesis": {
+      "decision": "Prioritise renewals due, then lapsed patients with consent.",
+      "learning_used": "Earlier check-in campaigns re-engaged roughly four in ten lapsed patients.",
+      "management_rule": "Nothing external is sent without owner approval.",
+      "supporting_actions": [
+        "Prepare the message for approval",
+        "Review results in one week"
+      ]
+    }
+  }
+]

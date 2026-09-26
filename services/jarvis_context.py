@@ -11,13 +11,18 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.demo_mode import demo_mode_enabled, demo_seed_path
 from core.memory import load_memory
 from services.clinic_data_service import list_records as _list_clinic_records
 from services.jarvis_memory import relevant_memory
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LEARNING_FILE = ROOT / "data" / "learning" / "learning_memory.json"
+LEARNING_FILE = (
+    demo_seed_path("learning_memory.json")  # public demo: synthetic, read-only
+    if demo_mode_enabled()
+    else ROOT / "data" / "learning" / "learning_memory.json"
+)
 MEMORY_FILE = ROOT / "database" / "company.json"
 
 SENSITIVE_KEYS = {

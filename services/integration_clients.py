@@ -20,6 +20,7 @@ existing single-clinic behavor, not crash a booking confirmation.
 from __future__ import annotations
 
 from core.db.models.integration import IntegrationProvider
+from core.demo_mode import demo_mode_enabled
 from core.identity.tenant_context import TenantContext
 from integrations.calendar_service import GoogleCalendarService
 from integrations.gmail_service import GmailService
@@ -28,6 +29,10 @@ from services.integration_credentials import resolve_provider_credentials
 
 
 def _resolved_credentials(tenant_context: TenantContext, provider: IntegrationProvider) -> dict | None:
+    if demo_mode_enabled():
+        # Public demo: no credential is ever resolved, so there is nothing to
+        # fall back to. The adapters additionally force dry-run themselves.
+        return None
     resolved = resolve_provider_credentials(tenant_context, provider)
     if resolved is None:
         return None

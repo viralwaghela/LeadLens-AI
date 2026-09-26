@@ -405,8 +405,13 @@ def show_jarvis_mode():
                 st.write(f"**Synthesis error:** {last_trace['synthesis_error']}")
             for label, err in (last_trace.get("consultation_errors") or {}).items():
                 st.write(f"**{label} error:** {err}")
-            st.caption(
-                "Most often this means OPENAI_API_KEY is missing/invalid, OPENAI_MODEL is not "
-                "a valid model name for your account, or you've hit a rate/credit limit. Fix the "
-                ".env file and restart the app."
-            )
+            from core.demo_mode import demo_mode_enabled
+
+            if demo_mode_enabled():
+                st.caption("The public demo limits AI usage so it stays available for everyone.")
+            else:
+                st.caption(
+                    "Most often this means OPENAI_API_KEY is missing/invalid, OPENAI_MODEL is not "
+                    "a valid model name for your account, or you've hit a rate/credit limit. Fix the "
+                    ".env file and restart the app."
+                )

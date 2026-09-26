@@ -379,6 +379,11 @@ def execute_item(item_id: str) -> dict[str, Any]:
     from services.authorization_guard import require_permission
 
     require_permission("automations.approve")
+    from core.demo_mode import DEMO_DISABLED_MESSAGE, demo_mode_enabled
+
+    if demo_mode_enabled():
+        # Public demo: no queued action ever executes, approved or not.
+        return {"success": False, "status": "blocked", "detail": DEMO_DISABLED_MESSAGE}
     rows = _load()
     item = next((row for row in rows if row.get("id") == item_id), None)
     if not item:

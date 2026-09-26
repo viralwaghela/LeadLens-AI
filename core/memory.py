@@ -36,6 +36,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from core.demo_mode import assert_write_allowed
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATABASE_FOLDER = PROJECT_ROOT / "database"
 def _db_file() -> Path:
@@ -243,6 +245,7 @@ def _sqlite_save_raw(payload: str) -> None:
     implements it as delete-then-reinsert, which would reset version to
     its default instead of incrementing it), so this uses an explicit
     UPDATE, falling back to INSERT only if the row doesn't exist yet."""
+    assert_write_allowed("legacy memory write")  # public-demo guard; no-op otherwise
     conn = _sqlite_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
@@ -284,6 +287,7 @@ def _sqlite_save_versioned(payload: str, expected_version: int) -> bool:
     """Save only if the row's version still matches what was read. Returns
     False (writing nothing) on a conflict, so the caller can retry against
     fresh data instead of silently clobbering someone else's write."""
+    assert_write_allowed("legacy memory write")
     conn = _sqlite_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
@@ -324,6 +328,7 @@ def _sqlite_atomic_update(mutator):
             conn.execute("ROLLBACK")
             return memory
 
+        assert_write_allowed("legacy memory write")  # rolled back by the except below
         new_payload = json.dumps(memory, ensure_ascii=False)
         now = datetime.now().isoformat(timespec="seconds")
         conn.execute(
@@ -403,6 +408,7 @@ def _pg_save_raw(payload: str) -> None:
     must bump `version` on conflict, or a concurrent update_memory() that
     read the row before this write won't detect this write happened and
     will silently clobber it on its own save."""
+    assert_write_allowed("legacy memory write")
     conn = _pg_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
@@ -453,6 +459,7 @@ def _pg_save_versioned(payload: str, expected_version: int) -> bool:
     """Save only if the row's version still matches what was read. Returns
     False (writing nothing) on a conflict, so the caller can retry against
     fresh data instead of silently clobbering someone else's write."""
+    assert_write_allowed("legacy memory write")
     conn = _pg_connect()
     try:
         now = datetime.now().isoformat(timespec="seconds")
@@ -506,6 +513,7 @@ def _pg_atomic_update(mutator):
             payload = payload or json.dumps(_fresh_default(), ensure_ascii=False)
             memory = _row_to_memory(payload)
             mutator(memory)
+            assert_write_allowed("legacy memory write")
             new_payload = json.dumps(memory, ensure_ascii=False)
             with conn.cursor() as cur:
                 cur.execute(
@@ -522,6 +530,7 @@ def _pg_atomic_update(mutator):
             conn.rollback()
             return memory
 
+        assert_write_allowed("legacy memory write")  # rolled back by the except below
         new_payload = json.dumps(memory, ensure_ascii=False)
         with conn.cursor() as cur:
             cur.execute(

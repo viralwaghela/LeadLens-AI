@@ -48,6 +48,37 @@ PERMISSIONS: frozenset[str] = frozenset(
     }
 )
 
+# Public-demo permission set. Every entry is a *view*/*use* permission; the
+# set is checked at import time below so a future edit can never smuggle a
+# write-class permission in without a loud failure.
+DEMO_VIEWER_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "organization.view",
+        "patients.view",
+        "appointments.view",
+        "treatments.view",
+        "payments.view",
+        "finance.view",
+        "leads.view",
+        "automations.view",
+        "jarvis.use",
+        "jarvis.finance",
+        "jarvis.operations",
+        "jarvis.marketing",
+    }
+)
+DEMO_ORG_PERMISSION_CAP: frozenset[str] = DEMO_VIEWER_PERMISSIONS
+
+_DEMO_FORBIDDEN_SUFFIXES = (".manage", ".approve")
+_DEMO_FORBIDDEN_PREFIXES = ("members.", "integrations.", "audit.")
+if not DEMO_VIEWER_PERMISSIONS <= PERMISSIONS:
+    raise RuntimeError("demo permission set contains a permission outside the taxonomy")
+if any(
+    p.endswith(_DEMO_FORBIDDEN_SUFFIXES) or p.startswith(_DEMO_FORBIDDEN_PREFIXES)
+    for p in DEMO_VIEWER_PERMISSIONS
+):
+    raise RuntimeError("the demo permission set must stay read-only")
+
 ROLE_PERMISSIONS: dict[MembershipRole, frozenset[str]] = {
     # Full access. The only role that can manage the organization itself
     # or hand out/revoke other memberships.
@@ -158,7 +189,29 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[str]] = {
             "jarvis.use",
         }
     ),
+    # Public-demo visitor: read-only across everything the demo showcases
+    # (dashboard, patients, leads, appointments, workflows, AI agents,
+    # approvals, analytics, patient intelligence — all synthetic data).
+    # Deliberately has NO `*.manage`, NO `automations.approve`, NO
+    # `members.*`, NO `integrations.*` (so no integration configuration or
+    # secrets surface) and NO `audit.view`. Only valid inside an
+    # organization with is_demo=True.
+    MembershipRole.DEMO_VIEWER: DEMO_VIEWER_PERMISSIONS,
 }
+
+
+def cap_permissions_for_org(permissions: frozenset[str], organization_is_demo: bool) -> frozenset[str]:
+    """The hard, role-independent ceiling for a demo organization.
+
+    In an is_demo organization NO membership — not even one mistakenly
+    given OWNER — may hold anything outside DEMO_ORG_PERMISSION_CAP, so the
+    public demo can never gain write/approve/manage/integration authority
+    by role assignment or by a bug in role handling. A non-demo organization
+    is returned unchanged (this function is a no-op for every real tenant).
+    """
+    if organization_is_demo:
+        return frozenset(permissions) & DEMO_ORG_PERMISSION_CAP
+    return frozenset(permissions)
 
 
 def permissions_for_role(role: MembershipRole) -> frozenset[str]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import Enum, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Enum, Float, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
@@ -32,6 +32,12 @@ class Organization(TimestampMixin, Base):
         nullable=False,
         default=OrganizationStatus.ACTIVE,
     )
+    # Public-demo tenant marker (docs/V2_DEMO_ENVIRONMENT.md). True only for
+    # the synthetic "LeadLens Demo Clinic". Every membership in an is_demo
+    # organization is hard-capped to the view-only demo permission set by
+    # core.identity.authorization_service.resolve_identity(), whatever role
+    # it holds, and the DEMO_VIEWER role is refused in any non-demo org.
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
     settings: Mapped["OrganizationSettings | None"] = relationship(
         back_populates="organization", uselist=False, cascade="all, delete-orphan"

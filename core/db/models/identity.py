@@ -82,6 +82,12 @@ class MembershipRole(str, enum.Enum):
     FINANCE = "FINANCE"
     MARKETING = "MARKETING"
     VIEWER = "VIEWER"
+    # Public-demo visitor role. Read-only, and only valid inside an
+    # organization with is_demo=True (see core/identity/permissions.py
+    # and authorization_service.resolve_identity()). 11 characters, so
+    # it fits the existing VARCHAR(12) enum column on non-native-enum
+    # databases; PostgreSQL needs the ALTER TYPE in the demo migration.
+    DEMO_VIEWER = "DEMO_VIEWER"
 
 
 class Membership(TimestampMixin, Base):

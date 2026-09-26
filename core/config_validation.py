@@ -165,4 +165,20 @@ def validate_configuration() -> ConfigReport:
             "may intentionally run without it during setup.",
         )
 
+    # --- Public demo (docs/V2_DEMO_ENVIRONMENT.md) ------------------------------
+    # Only when this deployment says it IS the demo: every misconfiguration the
+    # demo's startup tripwire would refuse to boot on is a FAIL here, so
+    # `scripts/production_readiness.py` validates a demo deployment's whole
+    # secret/flag checklist in one command. Names only, never values.
+    from core.demo_mode import demo_mode_enabled
+
+    if demo_mode_enabled():
+        from core.demo_tripwire import environment_problems
+
+        problems = environment_problems()
+        for problem in problems:
+            report.add("FAIL", f"demo deployment: {problem}")
+        if not problems:
+            report.add("OK", "demo deployment: environment passes every isolation check.")
+
     return report

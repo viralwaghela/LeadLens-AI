@@ -296,6 +296,49 @@ def check_integration_configuration() -> CheckOutcome:
         return CheckOutcome("integration_configuration", DEGRADED, f"{type(exc).__name__}: {exc}")
 
 
+def check_demo_isolation() -> CheckOutcome:
+    """Public-demo isolation (docs/V2_DEMO_ENVIRONMENT.md), both directions:
+
+      * on a demo deployment: the environment and database must pass every
+        tripwire check (no provider secret, Postgres only, no non-demo
+        organization, demo-marked company profile) — UNHEALTHY otherwise;
+      * on any OTHER deployment: no organization may be flagged is_demo —
+        a demo tenant sitting in a real database is DEGRADED.
+
+    Names and counts only; never a value."""
+    try:
+        from core.db.models.organization import Organization
+        from core.db.session import get_database_url, make_engine, session_scope
+        from core.demo_mode import demo_mode_enabled
+        from core.demo_tripwire import database_problems, demo_seeded, environment_problems
+
+        engine = make_engine(get_database_url())
+        try:
+            with session_scope(engine) as session:
+                if demo_mode_enabled():
+                    from core.memory import load_memory
+
+                    problems = environment_problems() + database_problems(
+                        session, dict(load_memory().get("company") or {})
+                    )
+                    if problems:
+                        return CheckOutcome("demo_isolation", UNHEALTHY, "; ".join(problems))
+                    if not demo_seeded(session):
+                        return CheckOutcome("demo_isolation", DEGRADED, "demo deployment is isolated but the demo tenant is not seeded yet")
+                    return CheckOutcome("demo_isolation", HEALTHY, "demo deployment: isolated and seeded")
+                demo_orgs = session.query(Organization).filter(Organization.is_demo.is_(True)).count()
+        finally:
+            engine.dispose()
+        if demo_orgs:
+            return CheckOutcome(
+                "demo_isolation", DEGRADED,
+                f"{demo_orgs} demo organization(s) present in a NON-demo deployment's database",
+            )
+        return CheckOutcome("demo_isolation", HEALTHY, "not a demo deployment; no demo organization present")
+    except Exception as exc:  # noqa: BLE001 - a health check must never crash
+        return CheckOutcome("demo_isolation", DEGRADED, f"could not check demo isolation ({type(exc).__name__})")
+
+
 def check_jarvis_configuration() -> CheckOutcome:
     if os.getenv("OPENAI_API_KEY", "").strip():
         return CheckOutcome("jarvis_llm_configuration", HEALTHY, "OPENAI_API_KEY present")
@@ -324,6 +367,7 @@ def run_health_check() -> HealthReport:
         check_scheduler_readiness(),
         check_credential_encryption(),
         check_integration_configuration(),
+        check_demo_isolation(),
         check_jarvis_configuration(),
         check_migration_flags(),
     ):

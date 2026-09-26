@@ -7,6 +7,7 @@ import re
 
 from dotenv import load_dotenv
 
+from core.demo_mode import demo_mode_enabled
 
 load_dotenv()
 
@@ -89,12 +90,28 @@ def generate_ai_response(
     if not safe_prompt:
         raise RuntimeError("The AI prompt is empty.")
 
+    demo_output_cap = None
+    if demo_mode_enabled():
+        # Public demo (docs/V2_DEMO_ENVIRONMENT.md): pin the cheapest suitable
+        # model regardless of any per-call override, refuse oversized prompts,
+        # and spend one call from the per-session + global hourly/daily
+        # budgets. Every failure here is a DemoModeError (a RuntimeError),
+        # which every caller already turns into a templated fallback answer.
+        from core import demo_llm
+
+        model = demo_llm.demo_model()
+        demo_llm.check_prompt_size(safe_prompt, system_prompt)
+        demo_llm.reserve_llm_call()
+        demo_output_cap = demo_llm.demo_max_output_tokens()
+
     # Reasoning-capable models (o-series, gpt-5.x) can spend the whole
     # max_output_tokens budget on hidden "thinking" tokens and return an
     # empty visible answer. Keep a floor high enough to leave room for both,
     # and ask for low reasoning effort so more of the budget reaches the
     # actual answer.
     effective_max_tokens = max(int(max_output_tokens or 0), 1500)
+    if demo_output_cap is not None:
+        effective_max_tokens = min(effective_max_tokens, demo_output_cap)
 
     safe_system_prompt = str(
         system_prompt or "You are a helpful AI assistant."

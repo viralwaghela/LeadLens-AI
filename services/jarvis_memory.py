@@ -52,6 +52,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from core.db.models.jarvis import JarvisLearningRecord, JarvisLearningRecordType
+from core.demo_mode import assert_write_allowed, demo_mode_enabled, demo_seed_path
 from core.db.session import make_engine, session_scope
 from core.identity.default_organization import (
     DEFAULT_ORGANIZATION_NAME,
@@ -107,6 +108,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _resolve_store_path() -> Path:
+    if demo_mode_enabled():
+        # Public demo: read the synthetic seed file, never the checkout's
+        # data/learning file, and ignore any env override.
+        return demo_seed_path("learning_memory.json")
     override = os.getenv("LEADLENS_LEARNING_MEMORY_PATH", "").strip()
     if override:
         return Path(override)
@@ -231,6 +236,7 @@ def _write_json_compat(data: dict[str, Any]) -> None:
     """Atomic write to the legacy JSON file. Always called on every save,
     permanently (see module docstring) — this is not a transitional
     measure."""
+    assert_write_allowed("learning memory file")  # public-demo guard; no-op otherwise
     with _LOCK:
         STORE.parent.mkdir(parents=True, exist_ok=True)
         handle, temporary = tempfile.mkstemp(

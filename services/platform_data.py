@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.demo_mode import assert_upload_allowed
 from core.memory import company_exists, load_memory, update_memory
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +178,7 @@ def company_setup_complete() -> bool:
 
 
 def save_uploaded_file(name: str, data: bytes) -> Path:
+    assert_upload_allowed("file upload")  # public-demo guard: never touches the disk
     UPLOADS.mkdir(parents=True, exist_ok=True)
     safe = Path(name).name
     path = UPLOADS / safe

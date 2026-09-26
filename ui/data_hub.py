@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
 import streamlit as st
+from core.demo_mode import assert_export_allowed, demo_mode_enabled
 from services.authorization_guard import PermissionDenied
 from services.platform_data import business_snapshot, preview_uploaded_file, save_company_profile, save_uploaded_file
+from ui.demo_gate import guarded_download_button
 
 
 def show_data_hub() -> None:
@@ -46,7 +48,11 @@ def show_data_hub() -> None:
                     st.success("Business memory updated for every agent.")
                     st.rerun()
     with tab2:
-        upload = st.file_uploader("Add business data", type=["csv", "json", "txt", "md", "xlsx"])
+        if demo_mode_enabled():
+            st.info("File uploads are disabled in the public demo.")  # also refused server-side (save_uploaded_file)
+            upload = None
+        else:
+            upload = st.file_uploader("Add business data", type=["csv", "json", "txt", "md", "xlsx"])
         if upload is not None:
             raw = upload.getvalue()
             path = save_uploaded_file(upload.name, raw)
@@ -60,6 +66,9 @@ def show_data_hub() -> None:
                 st.warning(f"The file was stored but could not be previewed: {error}")
             st.info("Uploaded files are stored locally in database/uploads. Automated ingestion into agent answers is prepared for the next connector layer.")
     with tab3:
-        payload = json.dumps(snapshot["memory"], indent=2, ensure_ascii=False)
-        st.download_button("Download complete business memory", payload, "leadlens_business_memory.json", "application/json", use_container_width=True)
+        def _memory_export() -> str:
+            assert_export_allowed("business memory export")
+            return json.dumps(snapshot["memory"], indent=2, ensure_ascii=False)
+
+        guarded_download_button("Download complete business memory", _memory_export, "leadlens_business_memory.json", "application/json", use_container_width=True, key="hub_dl_memory")
         st.json({key: len(value) if isinstance(value, list) else "profile" for key, value in snapshot["memory"].items()})

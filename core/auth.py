@@ -364,7 +364,7 @@ def _clear_pending_membership_choice() -> None:
 
 def _complete_login(db_session, user, membership) -> None:
     from core.identity.organization_service import get_organization
-    from core.identity.permissions import permissions_for_role
+    from core.identity.permissions import cap_permissions_for_org, permissions_for_role
     from core.identity.session import AuthenticatedSession, store_session
 
     org = get_organization(db_session, membership.organization_id)
@@ -376,7 +376,12 @@ def _complete_login(db_session, user, membership) -> None:
             organization_name=org.name if org else "",
             membership_id=membership.id,
             role=membership.role,
-            permissions=permissions_for_role(membership.role),
+            # Same cap resolve_identity() applies on every revalidation, so
+            # even this first, not-yet-revalidated session never carries
+            # more than a demo organization allows.
+            permissions=cap_permissions_for_org(
+                permissions_for_role(membership.role), bool(getattr(org, "is_demo", False))
+            ),
         )
     )
     _clear_pending_membership_choice()

@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from core.demo_mode import assert_external_action_allowed, demo_mode_enabled
 from integrations.base import IntegrationResult
 
 
@@ -25,6 +26,11 @@ class WhatsAppBusinessService:
         self.api_version = str(source.get("api_version") or os.getenv("WHATSAPP_API_VERSION", "v23.0")).strip() or "v23.0"
         configured = bool(self.token and self.phone_number_id)
         self.dry_run = (not configured) if dry_run is None else dry_run
+        if demo_mode_enabled():
+            # Public demo: never hold or use a real credential, never go live.
+            self.token = ""
+            self.phone_number_id = ""
+            self.dry_run = True
 
     def status(self) -> dict[str, Any]:
         return {"provider": "WhatsApp Business", "configured": bool(self.token and self.phone_number_id), "mode": "dry-run" if self.dry_run else "live", "phone_number_id": self.phone_number_id}
@@ -38,6 +44,7 @@ class WhatsAppBusinessService:
         if self.dry_run:
             return IntegrationResult("whatsapp", "send_text", True, "simulated", detail="WhatsApp message validated; no message sent.", payload=request_body)
         try:
+            assert_external_action_allowed("whatsapp send")  # belt and braces; dry_run is forced above
             url = f"https://graph.facebook.com/{self.api_version}/{self.phone_number_id}/messages"
             response = requests.post(url, headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}, json=request_body, timeout=30)
             data = response.json() if response.content else {}
