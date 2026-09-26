@@ -65,7 +65,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def dotenv_problems(root: Path | None = None) -> list[str]:
     """A .env in this checkout may hold PRODUCTION values, and several app modules call
-    load_dotenv() on import (services/ai.py, ...), which would quietly load them into an
+    dotenv auto-loading on import (services/ai.py, ...), which would quietly load them into an
     operator process. Refuse to run from such a checkout: use a clean git worktree."""
     if ((root or REPO_ROOT) / ".env").exists():
         return [
