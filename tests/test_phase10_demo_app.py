@@ -86,7 +86,8 @@ def _new_app() -> AppTest:
 
 
 def _enter(at: AppTest) -> AppTest:
-    at.button(key="demo_enter_btn").click().run()
+    """Entry is automatic now (no landing page, no click): opening the app IS entering."""
+    assert not [b for b in at.button if b.key == "demo_enter_btn"]
     return at
 
 
@@ -106,13 +107,35 @@ def _problems(at: AppTest) -> list[str]:
 # Entry flow
 # ---------------------------------------------------------------------------
 
-def test_landing_page_offers_the_demo_and_shows_no_login_form(demo_app):
+def test_opening_the_demo_url_enters_the_workspace_with_no_login_or_click(demo_app):
     at = _new_app()
-    assert not at.exception
-    assert at.button(key="demo_enter_btn").label == "Explore LeadLens Demo"
-    assert DEMO_ORG_NAME in _texts(at)
-    assert not at.text_input  # no email/password form exists in demo mode
-    assert BANNER not in _texts(at)  # the workspace banner only appears once inside
+    assert not at.exception, [e.message for e in at.exception]
+    assert not [t for t in at.text_input if getattr(t, "type", "") == "password" or "mail" in (t.label or "").lower()]
+    assert not [b for b in at.button if b.key == "demo_enter_btn"]  # no landing page / entry button
+    assert BANNER in _texts(at)  # straight into the workspace
+    assert at.session_state["v2_auth_session"]["role"] == "DEMO_VIEWER"
+
+
+def test_no_credential_or_query_param_is_involved_in_entry(demo_app):
+    at = _new_app()
+    stored = repr(at.session_state["v2_auth_session"]).lower()
+    assert "password" not in stored and "demo-viewer@" not in _texts(at)
+
+
+def test_direct_navigation_to_every_protected_page_lands_in_the_restricted_workspace(demo_app):
+    at = _new_app()
+    for page in ("Patient Intelligence",):
+        at.radio(key="jarvis_page").set_value(page).run()
+        assert not at.exception
+        assert at.session_state["v2_auth_session"]["role"] == "DEMO_VIEWER"
+        assert BANNER in _texts(at)
+    # a fresh visitor asking for a deep link (query params ignored) is still just the demo viewer
+    at2 = AppTest.from_file(str(ROOT / "app.py"), default_timeout=90)
+    at2.query_params["page"] = "Settings"
+    at2.query_params["role"] = "OWNER"
+    at2.run()
+    assert not at2.exception
+    assert at2.session_state["v2_auth_session"]["role"] == "DEMO_VIEWER"
 
 
 def test_entering_the_demo_shows_the_banner_and_the_workspace(demo_app):
@@ -160,7 +183,8 @@ def test_a_session_for_another_organization_is_never_honored(demo_app):
     at.session_state["v2_auth_session"] = forged
     at.run()
     assert not at.exception
-    assert at.button(key="demo_enter_btn").label == "Explore LeadLens Demo"  # back to the landing page
+    assert at.session_state["v2_auth_session"]["organization_id"] != 999  # re-derived: the forged one is discarded
+    assert at.session_state["v2_auth_session"]["role"] == "DEMO_VIEWER"
 
 
 def test_landing_page_is_generic_when_the_environment_is_unsafe(demo_app, monkeypatch):

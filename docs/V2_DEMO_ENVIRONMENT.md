@@ -4,7 +4,7 @@ A public, portfolio-facing demo of LeadLens that anyone can open without a
 login, that shows only **synthetic** data, and that cannot write, send,
 export, or reach anything real — even if its own authorization logic failed.
 
-- Live behaviour: visitors land on a page, click **Explore LeadLens Demo**,
+- Live behaviour: visitors opening the URL are admitted straight away (no landing page, no click),
   and are admitted (server-side, passwordless) as the read-only demo viewer of
   a fictional clinic, *LeadLens Demo Clinic*. A banner reads **Demo Workspace —
   Sample Data Only**.
@@ -115,8 +115,8 @@ git push origin demo
 - [ ] Deploy. Streamlit reinstalls `requirements.txt` on each deploy.
 
 ### 3.6 Verify
-- [ ] Open the app: you should see the landing page, **Explore LeadLens Demo**,
-  then the workspace with the **Demo Workspace — Sample Data Only** banner.
+- [ ] Open the app: you should land directly in the workspace,
+  with no login or landing page, and the workspace with the **Demo Workspace — Sample Data Only** banner.
 - [ ] Try to approve an action, export a CSV, upload a file: each is refused.
 - [ ] From a clean shell with the *demo* variables only, `python scripts/production_readiness.py`
   must show no FAIL (it runs the same isolation checks the app does).

@@ -1,4 +1,4 @@
-"""Public-demo landing page, safety gate, and workspace banner.
+"""Public-demo automatic entry, safety gate, and workspace banner.
 
 Presentation and flow only. The actual admission decision is made server-
 side by core/demo_session.py, and everything the visitor can or cannot do
@@ -14,8 +14,9 @@ Order of events for a visitor:
        screen.
     2. If a valid demo session exists (or can be restored from the signed
        reload token the Core switch uses), continue into the product.
-    3. Otherwise show the landing page. "Explore LeadLens Demo" asks the
-       server to admit the visitor as the demo viewer.
+    3. Otherwise the server admits the visitor as the demo viewer straight
+       away (no landing page, no click, no credentials) and reruns into the
+       workspace. If the demo is not seeded/ready the visitor sees a notice.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ import logging
 
 import streamlit as st
 
-from core.demo_mode import DEMO_ORG_NAME
 from core.demo_session import DemoNotReady, build_demo_session, is_demo_session
 
 _LOG = logging.getLogger(__name__)
@@ -70,30 +70,6 @@ def _safety_gate() -> bool:
     return True
 
 
-def _render_landing() -> None:
-    st.markdown(
-        "<div style='max-width:640px;margin:5rem auto 0;text-align:center'>"
-        "<h1>✦ LeadLens CareOS</h1>"
-        "<p style='opacity:.8;font-size:1.05rem'>An AI-powered operating system for physiotherapy clinics "
-        "and other small service businesses — with <strong>Jarvis</strong>, your AI Chief of Staff.</p>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    _, center, _ = st.columns([1, 1.6, 1])
-    with center:
-        st.markdown(
-            f"You are about to explore **{DEMO_ORG_NAME}** — a fictional clinic.\n\n"
-            "- Everything you see is **synthetic sample data**. No real patients, no real business.\n"
-            "- The demo is **read-only**: you can look around, ask Jarvis questions, and review "
-            "recommendations, but nothing is saved.\n"
-            "- **Nothing is ever sent.** No WhatsApp messages, emails or calendar events leave this demo, "
-            "and exports and uploads are disabled.\n"
-            "- AI answers are limited to keep the demo available for everyone."
-        )
-        if st.button("Explore LeadLens Demo", type="primary", use_container_width=True, key="demo_enter_btn"):
-            _enter_demo()
-
-
 def _enter_demo() -> None:
     from core.auth import _v2_session_scope
     from core.identity.session import store_session
@@ -110,7 +86,7 @@ def _enter_demo() -> None:
 
 def require_demo_session() -> bool:
     """Returns True once the visitor is inside the demo workspace; renders
-    the landing page (or an unavailable notice) and returns False
+    the automatic admission (or an unavailable notice) and returns False
     otherwise."""
     from core.auth import _restore_session_from_reload_token, current_authenticated_session
     from core.identity.session import clear_session
@@ -132,7 +108,7 @@ def require_demo_session() -> bool:
             return True
         clear_session()
 
-    _render_landing()
+    _enter_demo()  # no landing page or login: admit the visitor as the restricted demo viewer
     return False
 
 
