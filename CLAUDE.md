@@ -144,11 +144,34 @@ feature in its own right.
   addition, no code/architecture/credential change. Verified against the
   live deployment post-redeploy: Mission Control reports "Jarvis loaded
   9 of 9 data sources, LIVE DATA CONNECTED" and Memory Center loads real
-  data, both via the exact call path that previously crashed. This fix
-  was applied directly to `client-1` only (the branch that deployment
-  actually tracks) — `master` does not yet have it; apply the same
-  `requirements.txt` addition there separately if `master` is ever
-  deployed on its own.
+  data, both via the exact call path that previously crashed. Applied
+  first to `client-1` (the branch that deployment actually tracks), then
+  mirrored onto `master` (`0ad2ab3`) with no merge — both branches now
+  have it.
+- **CI FIX (2026-09-26, `client-1` `f896be2`, `master` `bde65ee`) —
+  DONE.** `tests/test_phase0_schema.py::test_alembic_upgrade_from_empty_database_reaches_head`
+  began failing in GitHub Actions: `alembic check` reported
+  `FLOAT() -> Double()` drift on `organization_settings.monthly_revenue`,
+  `monthly_expenses` and `target_monthly_revenue`. Root cause: those three
+  columns in `core/db/models/organization.py` had no explicit type
+  (`Mapped[float | None] = mapped_column()`), so SQLAlchemy inferred it
+  from the annotation, and SQLAlchemy 2.1 changed the bare-`float` default
+  from `Float` to `Double`. `requirements.txt` allows
+  `SQLAlchemy>=2.0,<3`, so fresh CI installs resolved 2.1.x while the
+  local venv (2.0.52) still inferred `Float` — which is why it never
+  reproduced locally. `Double` was never intentional: the Phase 0
+  migration created these as `sa.Float()` and no model/migration ever used
+  `Double`. Fixed by pinning `mapped_column(Float)` on the three columns —
+  a model-metadata-only change, **no migration**, no DDL, no production
+  impact (on PostgreSQL `FLOAT` with no precision is already double
+  precision). Verified on both SQLAlchemy 2.0.52 and 2.1.1: full suite 442
+  passed, fresh-DB `alembic upgrade head` + `alembic check` clean, CI green
+  on both branches, live app unchanged. **Watch for this class of bug:**
+  any new `Mapped[float]` (or other bare annotation-inferred column) in
+  `core/db/models/` will drift again on a SQLAlchemy that changes its
+  defaults — give every column an explicit type. A global
+  `type_annotation_map = {float: Float}` on `Base` was considered and
+  deliberately not added (kept the fix minimal); it remains an option.
 
 ## V2 migration (in progress — read before touching `core/db/`, `core/identity/`, `alembic/`, `services/jarvis_memory.py`, `services/crm_read_router.py`, `services/tenant_operational_sync.py`, `services/integration_credentials.py`, `services/credential_encryption.py`, `integrations/*.py`)
 
