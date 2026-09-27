@@ -244,31 +244,44 @@ def _clinic_aggregates(
     }
 
 
-def build_jarvis_context(query: str = "") -> dict[str, Any]:
-    """Return full internal context plus a safe LLM-ready representation."""
-    memory = load_memory()
-    company = memory.get("company", {})
+_CLINIC_ENTITIES = (
+    "patients", "appointments", "packages", "payments", "therapists", "leads", "corporate_clients",
+)
+
+
+def _load_clinic_collections_uncached() -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[str]]:
+    """The actual reads. Was one list_records() call per entity (7 separate database
+    sessions, each independently re-resolving the live organization) — build_jarvis_context()
+    is called from several places in a single page render (ui/jarvis_mode.py,
+    ui/business_jarvis_suite.py, services/agent_collaboration_v23.py, ...), each paying
+    that cost again, which is what made Mission Control slow. Uses the same
+    read_rows_bulk() consolidation services/clinic_data_service.py's Reports-page fix
+    introduced: one shared session/org-resolution for every entity, when
+    TENANT_AUTHORITATIVE_ENABLED — falls back to the original per-entity list_records()
+    path otherwise (every non-Phase-8 deployment, unchanged)."""
+    from services.clinic_data_service import _exclude_archived
 
     collections: dict[str, list[dict[str, Any]]] = {}
     source_status: list[dict[str, Any]] = []
     unavailable: list[str] = []
 
-    for entity in (
-        "patients",
-        "appointments",
-        "packages",
-        "payments",
-        "therapists",
-        "leads",
-        "corporate_clients",
-    ):
+    bulk: dict[str, list[dict[str, Any]]] | None = None
+    try:
+        from services.crm_read_router import TENANT_AUTHORITATIVE_ENABLED, read_rows_bulk
+
+        if TENANT_AUTHORITATIVE_ENABLED:
+            bulk = read_rows_bulk(list(_CLINIC_ENTITIES))
+    except Exception:  # pragma: no cover - defensive only; never blocks the fallback below
+        bulk = None
+
+    for entity in _CLINIC_ENTITIES:
         # Used to read data/pilot/{entity}.json, a leftover from before
         # clinic_data_service.py was migrated onto core.memory (Postgres/
         # SQLite) — that directory doesn't exist in this deployment, so
         # every clinic collection here was silently empty, always. Read
         # from the same store the CRM actually writes to instead.
         try:
-            rows = _list_clinic_records(entity)
+            rows = _exclude_archived(bulk[entity]) if bulk is not None else _list_clinic_records(entity)
             error = None
         except Exception as exc:  # pragma: no cover - defensive only
             rows = []
@@ -284,6 +297,33 @@ def build_jarvis_context(query: str = "") -> dict[str, Any]:
         })
         if error:
             unavailable.append(f"clinic.{entity}: {error}")
+    return collections, source_status, unavailable
+
+
+def _load_clinic_collections() -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[str]]:
+    """Demo deployments only: short-lived cache on top of the bulk fetch above, since
+    build_jarvis_context() is called several times per page render (see that function's
+    own docstring) and demo data cannot change between an operator seed/reset (the
+    write guard blocks every other write — see core/db/demo_guard.py) — a 30s-stale
+    read is never observably wrong there. Production is completely unaffected: this
+    only ever calls the uncached path, exactly as before this function existed."""
+    if demo_mode_enabled():
+        import streamlit as st
+
+        @st.cache_data(ttl=30, show_spinner=False)
+        def _cached(_cache_bust: str) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], list[str]]:
+            return _load_clinic_collections_uncached()
+
+        return _cached("demo")
+    return _load_clinic_collections_uncached()
+
+
+def build_jarvis_context(query: str = "") -> dict[str, Any]:
+    """Return full internal context plus a safe LLM-ready representation."""
+    memory = load_memory()
+    company = memory.get("company", {})
+
+    collections, source_status, unavailable = _load_clinic_collections()
 
     learning, learning_error = _read_json(LEARNING_FILE, {})
     if not isinstance(learning, dict):
