@@ -605,7 +605,21 @@ def patient_profile(patient_id: str, *, organization_id: int | None = None) -> d
         for row in list_records("progress_notes", organization_id=organization_id)
         if str(row.get("patient_id")) == str(patient_id)
     ]
+    return _build_patient_profile(patient, appointments, packages, payments, progress_notes)
 
+
+def _build_patient_profile(
+    patient: dict[str, Any],
+    appointments: list[dict[str, Any]],
+    packages: list[dict[str, Any]],
+    payments: list[dict[str, Any]],
+    progress_notes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The pure-Python half of patient_profile(): every derived field (risk flags,
+    session counts, last/next visit, ...), given that one patient's own rows already
+    fetched. Shared by patient_profile() (one patient) and patient_risk_summary()
+    (every patient, via a handful of bulk org-wide reads instead of looping
+    list_records() per patient — see that function's docstring)."""
     completed_dates = sorted(
         [
             row.get("appointment_date", "")
@@ -705,10 +719,41 @@ def patient_profile(patient_id: str, *, organization_id: int | None = None) -> d
     }
 
 
+def _grouped_by_patient(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("patient_id")), []).append(row)
+    return grouped
+
+
 def patient_risk_summary(*, organization_id: int | None = None) -> list[dict[str, Any]]:
+    """Was an N+1: one list_records() call per patient (x4 entities) via
+    patient_profile(), so a demo/clinic with 48 patients issued 190+ database round
+    trips and could hang for tens of seconds (see docs/... the Reports-page hang this
+    fixed). Reads each entity ONCE for the whole organization instead — a constant 5
+    queries regardless of patient count — and groups rows by patient_id in Python.
+    Also resolves the live organization ONCE (when the caller didn't already supply
+    one) instead of once per entity call — see resolve_current_organization_id()."""
+    if organization_id is None:
+        from services.crm_read_router import resolve_current_organization_id
+
+        organization_id = resolve_current_organization_id()
+    patients = list_records("patients", organization_id=organization_id)
+    appointments_by_patient = _grouped_by_patient(list_records("appointments", organization_id=organization_id))
+    packages_by_patient = _grouped_by_patient(list_records("packages", organization_id=organization_id))
+    payments_by_patient = _grouped_by_patient(list_records("payments", organization_id=organization_id))
+    notes_by_patient = _grouped_by_patient(list_records("progress_notes", organization_id=organization_id))
+
     results = []
-    for patient in list_records("patients", organization_id=organization_id):
-        profile = patient_profile(str(patient.get("patient_id")), organization_id=organization_id)
+    for patient in patients:
+        patient_id = str(patient.get("patient_id"))
+        profile = _build_patient_profile(
+            patient,
+            appointments_by_patient.get(patient_id, []),
+            packages_by_patient.get(patient_id, []),
+            payments_by_patient.get(patient_id, []),
+            notes_by_patient.get(patient_id, []),
+        )
         results.append(
             {
                 "patient_id": patient.get("patient_id"),
@@ -731,13 +776,27 @@ def patient_risk_summary(*, organization_id: int | None = None) -> list[dict[str
     )
 
 
-def clinic_metrics(*, organization_id: int | None = None) -> dict[str, Any]:
+def clinic_metrics(
+    *,
+    organization_id: int | None = None,
+    risk_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """`risk_rows`: pass an already-computed patient_risk_summary() result (e.g. a
+    caller that also needs the detailed rows, like ui/crm_dashboard.py) to avoid
+    running that O(patients) computation twice in the same page load. Computed
+    internally when omitted, so every existing caller is unaffected. Also resolves
+    the live organization ONCE — see resolve_current_organization_id()."""
+    if organization_id is None:
+        from services.crm_read_router import resolve_current_organization_id
+
+        organization_id = resolve_current_organization_id()
     patients = list_records("patients", organization_id=organization_id)
     appointments = list_records("appointments", organization_id=organization_id)
     packages = list_records("packages", organization_id=organization_id)
     payments = list_records("payments", organization_id=organization_id)
     therapists = list_records("therapists", organization_id=organization_id)
-    risk_rows = patient_risk_summary(organization_id=organization_id)
+    if risk_rows is None:
+        risk_rows = patient_risk_summary(organization_id=organization_id)
     today = date.today().isoformat()
     return {
         "patients": len(patients),

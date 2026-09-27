@@ -48,7 +48,7 @@ def _trend_data(metrics: dict) -> pd.DataFrame:
 
 
 def show_crm_dashboard() -> None:
-    company = load_company(); metrics = clinic_metrics(); risks = patient_risk_summary()
+    company = load_company(); risks = patient_risk_summary(); metrics = clinic_metrics(risk_rows=risks)
     business_name = company.get("business_name", "your clinic")
     st.markdown(f'''<div class="crm-hero"><div class="eyebrow">CLINIC DASHBOARD</div><h1>Dashboard</h1><p>Overview of {business_name}'s patients, appointments, care plans and operations.</p></div>''', unsafe_allow_html=True)
 

@@ -496,6 +496,28 @@ def compare_rows(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def resolve_current_organization_id() -> int | None:
+    """Resolve the live organization id ONCE, for a caller (e.g.
+    patient_risk_summary(), clinic_metrics()) about to make several
+    read_rows()/list_records() calls in the same request and wants to pass the
+    result through explicitly via each call's own `organization_id=` parameter,
+    instead of paying read_rows()'s resolve_live_organization_id() database round
+    trip again on every single one of those calls — the exact repeated-per-call cost
+    that made services/clinic_data_service.py's CRM dashboard/reports page slow (see
+    docs/... the fix's own note in patient_risk_summary()'s docstring).
+
+    Returns None when TENANT_AUTHORITATIVE_ENABLED is off: relational routing isn't
+    in play for entities gated by the per-entity LEADLENS_V2_READ_<ENTITY> flags
+    (each of those still resolves its own organization independently, unchanged),
+    so there is nothing meaningful to resolve once up front — callers should treat
+    None as "no id to reuse, keep passing organization_id=None as before"."""
+    if not TENANT_AUTHORITATIVE_ENABLED:
+        return None
+    engine = _get_engine()
+    with session_scope(engine) as session:
+        return resolve_live_organization_id(session)
+
+
 def read_rows(
     entity: str,
     legacy_reader: Callable[[], list[dict[str, Any]]],
