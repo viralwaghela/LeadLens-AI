@@ -519,6 +519,52 @@ demo-tenant-only reset live in `demo/` and `scripts/seed_demo.py` / `scripts/res
 analysis and the four test files. Do not build a demo path that shares a database, key or
 secret with production, and do not import `demo.seeder`/`demo.operator_cli` from app code.
 
+**Phase 10 status (2026-09-27): LIVE and verified — ready for portfolio/Contra links.**
+Deployed at `beyondpainjarvis`'s sibling Streamlit app, tracking release branch `demo`
+(mirrors `demo-environment`, currently at `6eba5b5`), its own Neon Postgres project (separate
+host from production's Supabase database), and its own OpenAI project/key, confirmed via a
+self-test button in the deployment's own diagnostics panel. Real end-to-end verification
+against that live Postgres — not just SQLite tests — found and fixed three real deployment
+defects along the way, each committed to `demo-environment` only, never merged toward
+`master`/`main`:
+- **Demo-mode never activated on Streamlit Cloud.** Streamlit only copies top-level
+  string/int/float secrets into `os.environ`; a TOML boolean (`LEADLENS_DEMO_MODE = true`)
+  was silently never seen by `demo_mode_enabled()`, so the app fell through to the legacy
+  shared-password login instead of the passwordless demo entry. `core/demo_mode.py` now also
+  checks Streamlit's `st.secrets` directly and promotes sibling boolean flags into the
+  environment when it finds a truthy one there.
+- **`seed_demo()`'s idempotency check was too weak.** It only tested `patients.count() > 0`,
+  so a seed run that died partway through (a dropped connection to Neon's pooled endpoint —
+  see below) left a partially-seeded tenant that a re-run would have wrongly read as "already
+  seeded" and skipped. `seeded_entity_counts()`/`_has_seeded_data()` now require every entity
+  table `seed_demo_data()` writes to be non-empty, not just one.
+- **The Reports/CRM-dashboard page hung indefinitely.** `patient_risk_summary()` called
+  `patient_profile()` once per patient, and each of those calls issued 4 more organization-wide
+  reads — 190+ database round trips for 48 seeded patients, against a real remote database
+  where each round trip has real network cost. Fixed in two rounds (`0b15bcb`, `6eba5b5`):
+  every entity is now read once for the whole organization instead of once per patient, in one
+  shared session/transaction with a cross-entity lookup cache, cutting the page's total query
+  count from 200+ to 9 (3 of which are Phase 7's own unavoidable auth-revalidation queries).
+  Went from never completing to ~9.5s measured / ~5–7s observed live.
+- Also separately confirmed and fixed: the app's `DATABASE_URL` must point at Neon's **direct**
+  (non-pooled) endpoint, not the `-pooler` one — the pooled endpoint's PgBouncer
+  transaction-pooling mode rejected SQLAlchemy/psycopg2's server-side prepared statements
+  (`ProgrammingError`); and the deployed Secrets briefly still contained the legacy
+  `APP_PASSWORD` variable, which `core/demo_tripwire.py` correctly refuses to boot on.
+
+Adversarial pass on the live deployment confirmed: no login/credentials shown or needed;
+tenant switching refused ("Only one clinic workspace is configured"); approving a real
+WhatsApp-send payload refused ("This action is disabled in the public demo"), item stays
+"Awaiting approval"; all three integrations report DRY-RUN/credentials-not-configured;
+business-profile save refused ("You don't have permission..."); file uploads refused before
+any widget renders; CSV/JSON export click intercepted client-side AND the download request
+itself aborts at the network level; log out returns cleanly to the same passwordless entry.
+See `docs/DEMO_DEPLOYMENT_CHECKLIST.md` for the full item-by-item PASS/FAIL record.
+A temporary, operator-only diagnostics panel (`core/demo_diagnostics.py`, shown only when
+`LEADLENS_DEMO_DIAGNOSTICS` is set — currently unset on the live deployment) surfaces the
+tripwire's own environment/database checks and a live OpenAI key self-test for exactly this
+kind of debugging; remove that env var if it's ever turned on again for troubleshooting.
+
 **Do not rebuild these without a real reason** (verified working,
 tested, and recently hardened this session — see `docs/V2_COEXISTENCE.md`'s
 own "Do not rebuild" section for the full reasoning per item):
