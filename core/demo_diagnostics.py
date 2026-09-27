@@ -4,6 +4,12 @@ Shown only when the operator sets LEADLENS_DEMO_DIAGNOSTICS (in the environment,
 top-level Streamlit secret, or inside any secrets section - so it still works if the
 secrets were mis-nested). Prints names and true/false only - NEVER a secret value, and
 never the database host. Remove the variable to hide it; it does nothing otherwise.
+
+Once demo mode itself is on, this also runs the exact tripwire checks
+require_demo_session() runs (core.demo_tripwire.environment_problems() /
+database_problems() / demo_seeded()) and shows their result, so a fail-closed "the demo
+is temporarily unavailable" page can be diagnosed from the deployment itself instead of
+guessing from outside. Still names/booleans only, per those functions' own contract.
 """
 from __future__ import annotations
 
@@ -61,7 +67,7 @@ def collect() -> dict[str, str]:
     top = _top_level_secrets()
     nested = _secret_sections_containing("LEADLENS_DEMO_MODE")
     demo = demo_mode_enabled()
-    return {
+    result = {
         "git branch": branch,
         "git commit": commit,
         "demo mode evaluates": str(demo),
@@ -71,6 +77,31 @@ def collect() -> dict[str, str]:
         "V2 auth enabled": str(v2_auth_enabled()),
         "auth path selected": "demo passwordless entry" if demo else ("V2 email/password" if v2_auth_enabled() else "LEGACY shared-password form"),
     }
+    if demo:
+        # Only meaningful once demo mode itself is on — this is the exact list
+        # require_demo_session()'s safety gate checks before admitting a visitor.
+        # Variable NAMES only, never a value (core/demo_tripwire.py's own contract).
+        from core.demo_tripwire import environment_problems
+
+        env_problems = environment_problems()
+        result["tripwire: environment_problems()"] = "; ".join(env_problems) if env_problems else "none"
+
+        db_problems_text = "database check did not run"
+        seeded = "not checked"
+        try:
+            from core.auth import _v2_session_scope
+            from core.demo_tripwire import database_problems, demo_seeded
+            from core.memory import load_memory
+
+            with _v2_session_scope() as db_session:
+                db_problems = database_problems(db_session, dict(load_memory().get("company") or {}))
+                seeded = str(demo_seeded(db_session))
+            db_problems_text = "; ".join(db_problems) if db_problems else "none"
+        except Exception as error:  # noqa: BLE001 - report the failure, never crash the panel
+            db_problems_text = f"database check raised {type(error).__name__} — see the deployment's own logs"
+        result["tripwire: database_problems()"] = db_problems_text
+        result["tripwire: demo_seeded()"] = seeded
+    return result
 
 
 def render_demo_diagnostics() -> None:
