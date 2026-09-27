@@ -289,8 +289,12 @@ def agent_council() -> list[dict[str, str]]:
     ]
 
 
-def meeting_brief() -> dict[str, Any]:
-    c = build_business_context()
+def meeting_brief(context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`context`: an already-computed build_business_context() result, to skip
+    recomputing it (see ui/jarvis_mode.py::show_jarvis_mode(), which needs the same
+    context for several things on one page render). Computed when omitted, so every
+    existing caller (none pass this) is unaffected."""
+    c = context if context is not None else build_business_context()
     return {
         "generated_at": datetime.now().strftime("%d %b %Y, %I:%M %p"),
         "headline": f"{c['company'].get('business_name', 'The clinic')} has {c['open_tasks']} open actions "

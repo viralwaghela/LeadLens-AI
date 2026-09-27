@@ -32,9 +32,14 @@ def _money(value):
         return "₹0"
 
 
-def get_jarvis_alerts():
+def get_jarvis_alerts(context: dict | None = None):
+    """`context`: pass an already-computed build_business_context() result (e.g.
+    show_jarvis_mode(), which needs it for several things on the same page render) to
+    skip recomputing it — build_business_context() is not free (several database
+    reads); every existing caller (none pass this) is unaffected."""
     memory = load_memory()
-    context = build_business_context()
+    if context is None:
+        context = build_business_context()
     alerts = []
     approvals = context.get("pending_approvals", 0)
     tasks = context.get("open_tasks", 0)
@@ -194,8 +199,8 @@ def _hero_fragment(owner_name: str) -> None:
 def show_jarvis_mode():
     company = load_company()
     context = build_business_context()
-    alerts = get_jarvis_alerts()
-    brief = meeting_brief()
+    alerts = get_jarvis_alerts(context)
+    brief = meeting_brief(context)
     snapshot = business_snapshot()
     memory = load_memory()
 
