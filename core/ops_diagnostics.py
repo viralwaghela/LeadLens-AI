@@ -72,3 +72,32 @@ def render_ops_diagnostics() -> None:
             if result.error_message:
                 st.write(f"**error.message:** {result.error_message}")
             st.write(result.detail)
+
+        st.divider()
+        st.caption(
+            "Read-only: inspects the jarvis_learning_records table and its record_type "
+            "enum, and runs one SELECT ... LIMIT 1 against this deployment's own "
+            "database. No writes, no patient/business data returned — only schema "
+            "metadata, row counts, and exception type/message."
+        )
+        if st.button("Inspect jarvis_learning_records schema", key="ops_db_selftest_btn"):
+            from core.ops_db_selftest import run_db_selftest
+
+            r = run_db_selftest()
+            st.write(f"**dialect:** {r.dialect or 'unknown'}")
+            if r.table_exists is not None:
+                st.write(f"**table exists:** {r.table_exists}")
+            if r.enum_labels_in_db or r.enum_labels_in_code:
+                st.write(f"**enum labels in database ({r.enum_type_name}):** {r.enum_labels_in_db}")
+                st.write(f"**enum labels in code:** {r.enum_labels_in_code}")
+                st.write(f"**labels match:** {r.labels_match}")
+            if r.query_ok is not None:
+                st.write(f"**reproduction query ok:** {r.query_ok}")
+                if r.row_count is not None:
+                    st.write(f"**row count (PREFERENCE, this org):** {r.row_count}")
+                if r.query_error_type:
+                    st.write(f"**query error.type:** {r.query_error_type}")
+                if r.query_error_message:
+                    st.write(f"**query error.message:** {r.query_error_message}")
+            if r.detail:
+                st.write(r.detail)
