@@ -12,6 +12,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+from core.ops_diagnostics import render_ops_diagnostics
+
+render_ops_diagnostics()
+
 if not require_login():
     st.stop()
 
