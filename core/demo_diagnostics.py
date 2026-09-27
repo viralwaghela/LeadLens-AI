@@ -81,3 +81,19 @@ def render_demo_diagnostics() -> None:
     with st.expander("Demo diagnostics (temporary — remove LEADLENS_DEMO_DIAGNOSTICS)", expanded=True):
         for name, value in collect().items():
             st.write(f"**{name}:** {value}")
+
+        st.divider()
+        st.caption(
+            "This makes one real, billed call to OpenAI using this deployment's configured "
+            "key. Click only when you intend to spend it."
+        )
+        if st.button("Run one minimal live OpenAI test call", key="demo_llm_selftest_btn"):
+            from core.demo_llm_selftest import run_selftest
+
+            result = run_selftest()
+            st.write(f"**authentication:** {result.authentication}")
+            st.write(f"**billing/quota:** {result.billing}")
+            st.write(f"**model access:** {result.model_access}")
+            if result.error_category:
+                st.write(f"**error category:** {result.error_category}")
+            st.write(result.detail)

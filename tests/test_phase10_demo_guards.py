@@ -1030,7 +1030,14 @@ def test_outbound_network_calls_exist_only_in_the_reviewed_places():
         "httpx.": set(),
         ".messages().send(": {"integrations/gmail_service.py"},
         "events().insert(": {"integrations/calendar_service.py"},
-        "OpenAI(": {"services/ai.py"},
+        # core/demo_llm_selftest.py is the one deliberate exception: an operator-only,
+        # explicit-click diagnostic (gated by LEADLENS_DEMO_DIAGNOSTICS) that makes one
+        # minimal live call to prove the configured key works. It never runs
+        # automatically, is not reachable by a visitor, and does not go through
+        # services/ai.py's normal demo call-budget accounting (it is not "a demo
+        # feature spending the visitor budget" — it is the operator testing the key
+        # itself, before any visitor budget should be trusted at all).
+        "OpenAI(": {"services/ai.py", "core/demo_llm_selftest.py"},
     }
     for needle, allowed in expectations.items():
         found = {str(p.relative_to(ROOT)).replace("\\", "/") for p in _app_sources() if needle in _read(p)}
