@@ -287,6 +287,56 @@ def test_seed_is_idempotent(demo_db):
     assert _rows_by_org(demo_db.engine) == snapshot
 
 
+def test_seed_completes_a_run_that_crashed_partway_through_instead_of_treating_it_as_done(demo_db):
+    """Reproduces a real incident: a seed run that died between writing 'patients' and
+    'payments' (e.g. a lost database connection) left the tenant with patients/appointments
+    but no payments/leads/approvals. seed_demo() must detect that and finish the job, not
+    read "patients exist" as "already seeded" and silently no-op."""
+    from demo.seeder import ensure_demo_identity, seeded_entity_counts
+    from demo.seed_data import build_dataset
+    from core.db.models.clinic import Payment
+    from core.demo_mode import allow_demo_writes
+
+    with allow_demo_writes(), seeding_environment(demo_db.engine, seed_dir=demo_db.seed_dir):
+        with Session(demo_db.engine) as session:
+            org, _, _ = ensure_demo_identity(session)
+            session.commit()
+            org_id = org.id
+        # Simulate the crash: write only the first two entities seed_demo_data() would
+        # write (therapists, patients), never reaching payments/leads/etc.
+        from services.clinic_data_service import add_record
+
+        dataset = build_dataset(ANCHOR)
+        for row in dataset.therapists:
+            add_record("therapists", {k: v for k, v in row.items() if not k.startswith("_")}, organization_id=org_id)
+        for row in dataset.patients:
+            add_record("patients", {k: v for k, v in row.items() if not k.startswith("_")}, organization_id=org_id)
+
+    counts_before = seeded_entity_counts(demo_db.engine, org_id)
+    assert counts_before["therapists"] > 0 and counts_before["patients"] > 0
+    assert counts_before["payments"] == 0 and counts_before["leads"] == 0  # the "crash" point
+
+    result = seed_demo(demo_db.engine, anchor=ANCHOR, seed_dir=demo_db.seed_dir)
+
+    assert result["seeded"] is True, "a partial prior run must not be read as already seeded"
+    counts_after = seeded_entity_counts(demo_db.engine, org_id)
+    assert all(count > 0 for count in counts_after.values()), counts_after
+    with Session(demo_db.engine) as session:
+        assert session.query(Payment).filter(Payment.organization_id == org_id).count() > 0
+
+
+def test_seeded_entity_counts_covers_every_entity_seed_demo_data_writes(demo_db):
+    """seeded_entity_counts()'s table list must stay in sync with what seed_demo_data()
+    actually inserts (_ENTITY_ID_FIELD), or a newly added entity could silently fall
+    outside the completeness check again."""
+    from demo.seeder import _ENTITY_ID_FIELD, seeded_entity_counts
+
+    result = seed_demo(demo_db.engine, anchor=ANCHOR, seed_dir=demo_db.seed_dir)
+    counts = seeded_entity_counts(demo_db.engine, result["organization_id"])
+    assert set(counts) == set(_ENTITY_ID_FIELD)
+    assert all(count > 0 for count in counts.values()), counts
+
+
 def test_two_seeded_databases_are_identical(tmp_path, monkeypatch):
     def seed_once(name: str):
         monkeypatch.setattr(business_memory, "DATABASE_FOLDER", tmp_path / name / "database")

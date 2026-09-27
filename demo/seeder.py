@@ -298,11 +298,32 @@ def _legacy_company() -> dict[str, Any]:
     return dict(load_memory().get("company") or {})
 
 
-def _has_seeded_data(engine, org_id: int) -> bool:
-    from core.db.models.clinic import Patient
+def seeded_entity_counts(engine, org_id: int) -> dict[str, int]:
+    """Row count, per organization, of every entity table seed_demo_data() actually
+    writes (_ENTITY_ID_FIELD's keys — the same table set wipe_demo_tenant_rows() cleans
+    up). Used to tell "fully seeded" apart from "partially seeded", e.g. a run that
+    crashed partway through (a lost database connection, a killed process, ...): earlier
+    entities (therapists, patients, appointments, ...) can already have rows while later
+    ones (payments, leads, ...) still have none. A single _has_seeded_data() check on just
+    one table (patients) would misread that partial state as "already seeded" and skip
+    re-running the seed."""
+    from sqlalchemy import func, select
 
+    counts: dict[str, int] = {}
     with Session(engine) as session:
-        return session.query(Patient).filter(Patient.organization_id == org_id).count() > 0
+        for name in _ENTITY_ID_FIELD:
+            table = Base.metadata.tables[name]
+            counts[name] = session.execute(
+                select(func.count()).select_from(table).where(table.c.organization_id == org_id)
+            ).scalar_one()
+    return counts
+
+
+def _has_seeded_data(engine, org_id: int) -> bool:
+    """True only when EVERY entity table has at least one row for this organization —
+    see seeded_entity_counts()'s docstring for why checking just one table is not enough."""
+    counts = seeded_entity_counts(engine, org_id)
+    return bool(counts) and all(count > 0 for count in counts.values())
 
 
 def seed_demo(engine, *, anchor: date | None = None, seed_dir: Path = DEMO_SEED_DIR) -> dict[str, Any]:
