@@ -139,7 +139,61 @@ def test_patient_risk_summary_query_count_does_not_scale_with_patient_count(tena
         "the N+1 is back: patient_risk_summary()/patient_profile() must read each "
         "entity once for the whole organization, never once per patient."
     )
-    assert many_count < 20, f"expected a small, patient-count-independent query count, got {many_count}"
+    assert many_count <= 12, (
+        f"expected read_rows_bulk()'s consolidated single-session fetch (~3 auth-"
+        f"revalidation + 6 entity statements: patients, therapists, packages, "
+        f"appointments, payments, progress_notes — sharing one ext_cache so no entity's "
+        f"parent-lookup table is ever queried twice), got {many_count}"
+    )
+
+
+def test_dashboard_shared_bulk_fetch_is_a_small_fixed_query_count(tenant_authoritative):
+    """The exact call sequence ui/crm_dashboard.py's show_crm_dashboard() makes: ONE
+    read_rows_bulk() covering everything both patient_risk_summary() and
+    clinic_metrics() need, each then given that same result via `_bulk=` instead of
+    fetching anything themselves. This is the actual query count a real page load
+    pays — locks in the fix beyond patient_risk_summary() alone."""
+    from services.crm_read_router import read_rows_bulk
+
+    engine = tenant_authoritative
+    _seed_clinic(engine, patients=25)
+    entities = ["patients", "appointments", "packages", "payments", "progress_notes", "therapists"]
+
+    def _dashboard_call():
+        bulk = read_rows_bulk(entities)
+        risks = crm.patient_risk_summary(_bulk=bulk)
+        return crm.clinic_metrics(risk_rows=risks, _bulk=bulk)
+
+    metrics, total = _count_statements(_dashboard_call)
+    assert metrics["patients"] == 25
+    assert total <= 10, (
+        f"expected ~9 statements total (3 auth-revalidation, 6 entity reads, zero more "
+        f"from patient_risk_summary()/clinic_metrics() since both were given the "
+        f"already-fetched bulk result), got {total}"
+    )
+
+
+def test_read_rows_bulk_matches_per_entity_relational_reads(tenant_authoritative):
+    """Correctness parity: read_rows_bulk()'s consolidated single-session fetch (with
+    its shared ext_cache and patients-row reuse) must return EXACTLY what calling
+    _read_relational_rows() once per entity, the old way, would have returned —
+    same rows, same normalized shape, same order. The performance fix must never
+    change what data patient_risk_summary()/clinic_metrics() actually see."""
+    from sqlalchemy.orm import Session
+
+    from services.crm_read_router import _read_relational_rows, read_rows_bulk, resolve_current_organization_id
+
+    engine = tenant_authoritative
+    _seed_clinic(engine, patients=12, slug="parity-clinic")
+    org_id = resolve_current_organization_id()
+    entities = ["patients", "appointments", "packages", "payments", "progress_notes", "therapists"]
+
+    bulk_result = read_rows_bulk(entities, organization_id=org_id)
+
+    with Session(engine) as session:
+        expected = {entity: _read_relational_rows(session, org_id, entity) for entity in entities}
+
+    assert bulk_result == expected
 
 
 def test_clinic_metrics_does_not_recompute_risk_summary_when_given_one(tenant_authoritative):
@@ -160,34 +214,35 @@ def test_clinic_metrics_does_not_recompute_risk_summary_when_given_one(tenant_au
 
 
 def test_organization_resolved_once_not_once_per_entity(tenant_authoritative):
-    """resolve_current_organization_id() should be used once and threaded through,
-    not re-resolved by every individual list_records() call inside
-    patient_risk_summary()/clinic_metrics()."""
-    from services.crm_read_router import resolve_current_organization_id
+    """The live organization must be resolved exactly ONCE per patient_risk_summary()
+    call (inside read_rows_bulk()'s own session), never once per entity — the
+    per-call-resolution cost that made every individual list_records() call pay its
+    own extra database round trip."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
 
     engine = tenant_authoritative
     _seed_clinic(engine, patients=5)
 
-    calls = {"n": 0}
-    real = resolve_current_organization_id
+    resolve_statements = {"n": 0}
 
-    def _counting(*a, **k):
-        calls["n"] += 1
-        return real(*a, **k)
+    @event.listens_for(Engine, "before_cursor_execute")
+    def _count(conn, cursor, statement, params, context, executemany):
+        if "FROM memberships" in statement or "FROM organizations" in statement:
+            resolve_statements["n"] += 1
 
-    import services.clinic_data_service as cds_module
-
-    cds_module.patient_risk_summary.__globals__  # sanity: module exists
-    import services.crm_read_router as router_module
-
-    orig = router_module.resolve_current_organization_id
-    router_module.resolve_current_organization_id = _counting
     try:
         crm.patient_risk_summary()
     finally:
-        router_module.resolve_current_organization_id = orig
+        event.remove(Engine, "before_cursor_execute", _count)
 
-    assert calls["n"] == 1, f"expected exactly one organization resolution, got {calls['n']}"
+    # Auth revalidation touches memberships/organizations a small, fixed number of
+    # times per resolution (see core.identity.authentication_service) — the point is
+    # that this does NOT scale with the 5 entity reads that follow it.
+    assert resolve_statements["n"] <= 2, (
+        f"organization resolution ran {resolve_statements['n']} membership/organization "
+        "statements — expected one bounded resolution, not one per entity read"
+    )
 
 
 def test_reports_dashboard_renders_without_error_for_many_patients(tenant_authoritative):

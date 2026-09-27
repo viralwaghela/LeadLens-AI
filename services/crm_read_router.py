@@ -358,7 +358,13 @@ def _normalize_corporate_client(row: CorporateClient) -> dict[str, Any]:
     return out
 
 
-def _read_relational_rows(session: Session, org_id: int, entity: str) -> list[dict[str, Any]]:
+def _read_relational_rows(
+    session: Session,
+    org_id: int,
+    entity: str,
+    *,
+    ext_cache: dict[type, dict[int, str]] | None = None,
+) -> list[dict[str, Any]]:
     """Ordered by relational id ascending, which — because backfill
     inserts in legacy list order and dual-write appends afterward in
     the same relative order — reproduces legacy list order in the
@@ -377,13 +383,21 @@ def _read_relational_rows(session: Session, org_id: int, entity: str) -> list[di
         }[entity]
         return [normalizer(row) for row in rows]
 
-    # Entities with parent relationships need a reverse external_id
-    # lookup — resolved once per entity call, not per row.
+    # Entities with parent relationships need a reverse external_id lookup —
+    # resolved once per entity call (not per row), or reused across entity calls
+    # within one read_rows_bulk() session when the caller passed a shared ext_cache
+    # — e.g. appointments, packages, payments and progress_notes all need the same
+    # patient id -> external_id map, so a bulk caller building several of them in one
+    # go would otherwise re-query the whole patients table once per entity.
+    cache = ext_cache if ext_cache is not None else {}
+
     def _ext_map(model_cls) -> dict[int, str]:
-        return {
-            r.id: r.external_id
-            for r in session.query(model_cls).filter(model_cls.organization_id == org_id).all()
-        }
+        if model_cls not in cache:
+            cache[model_cls] = {
+                r.id: r.external_id
+                for r in session.query(model_cls).filter(model_cls.organization_id == org_id).all()
+            }
+        return cache[model_cls]
 
     if entity == "appointments":
         patients = _ext_map(Patient)
@@ -516,6 +530,75 @@ def resolve_current_organization_id() -> int | None:
     engine = _get_engine()
     with session_scope(engine) as session:
         return resolve_live_organization_id(session)
+
+
+def read_rows_bulk(
+    entities: list[str],
+    *,
+    organization_id: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch several TENANT_AUTHORITATIVE entities in ONE session/transaction
+    instead of read_rows()'s usual one-session-per-entity-call pattern, and share
+    one ext_cache across them so a shared lookup (e.g. patients, needed by
+    appointments/packages/payments/progress_notes) is queried once for the whole
+    batch rather than once per entity. Built for callers that need several entities
+    together in one page render — patient_risk_summary()/clinic_metrics() — where
+    each separate session (its own connection checkout + BEGIN + COMMIT) is real,
+    measurable network round-trip cost against a remote database, independent of how
+    simple the query itself is.
+
+    Only valid when TENANT_AUTHORITATIVE_ENABLED (Phase 8's relational-authoritative
+    CRM reads) — callers must check that themselves and keep using their existing
+    per-entity read_rows()/list_records() path otherwise; that path (legacy storage,
+    or the per-entity LEADLENS_V2_READ_<ENTITY> flags) is completely unchanged."""
+    if not TENANT_AUTHORITATIVE_ENABLED:
+        raise RuntimeError("read_rows_bulk() requires LEADLENS_V2_CRM_TENANT_AUTHORITATIVE_ENABLED")
+    unknown = [e for e in entities if e not in _MODEL_BY_ENTITY]
+    if unknown:
+        raise ValueError(f"read_rows_bulk() only supports relational entities, got {unknown!r}")
+
+    # Entities that are both directly requestable AND an ext_cache dependency of
+    # another requested entity: patients (needed by appointments/packages/payments/
+    # progress_notes), therapists (appointments/progress_notes), packages (payments).
+    # Fetching each of these raw ONCE — reused both for its own output and to seed
+    # ext_cache — means a caller asking for several of them together (exactly what
+    # patient_risk_summary()/clinic_metrics() do) never queries the same table twice.
+    wants = set(entities)
+    fetch_patients = bool(wants & {"patients", "appointments", "packages", "payments", "progress_notes"})
+    fetch_therapists = bool(wants & {"therapists", "appointments", "progress_notes"})
+    fetch_packages = bool(wants & {"packages", "payments"})
+
+    engine = _get_engine()
+    with session_scope(engine) as session:
+        org_id = organization_id if organization_id is not None else resolve_live_organization_id(session)
+        ext_cache: dict[type, dict[int, str]] = {}
+        raw_patients = raw_therapists = raw_packages = None
+
+        if fetch_patients:
+            raw_patients = session.query(Patient).filter(Patient.organization_id == org_id).order_by(Patient.id.asc()).all()
+            ext_cache[Patient] = {row.id: row.external_id for row in raw_patients}
+        if fetch_therapists:
+            raw_therapists = session.query(Therapist).filter(Therapist.organization_id == org_id).order_by(Therapist.id.asc()).all()
+            ext_cache[Therapist] = {row.id: row.external_id for row in raw_therapists}
+        if fetch_packages:
+            raw_packages = session.query(Package).filter(Package.organization_id == org_id).order_by(Package.id.asc()).all()
+            ext_cache[Package] = {row.id: row.external_id for row in raw_packages}
+            patients_ext = ext_cache.get(Patient, {})
+            raw_packages_normalized = [
+                _normalize_package(row, patient_ext=patients_ext.get(row.patient_id)) for row in raw_packages
+            ]
+
+        result: dict[str, list[dict[str, Any]]] = {}
+        for entity in entities:
+            if entity == "patients":
+                result["patients"] = [_normalize_patient(row) for row in raw_patients]
+            elif entity == "therapists":
+                result["therapists"] = [_normalize_therapist(row) for row in raw_therapists]
+            elif entity == "packages":
+                result["packages"] = raw_packages_normalized
+            else:
+                result[entity] = _read_relational_rows(session, org_id, entity, ext_cache=ext_cache)
+        return result
 
 
 def read_rows(

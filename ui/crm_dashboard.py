@@ -47,8 +47,20 @@ def _trend_data(metrics: dict) -> pd.DataFrame:
     return pd.DataFrame({"Date": days, "Appointments": vals}).set_index("Date")
 
 
+_DASHBOARD_ENTITIES = ("patients", "appointments", "packages", "payments", "progress_notes", "therapists")
+
+
 def show_crm_dashboard() -> None:
-    company = load_company(); risks = patient_risk_summary(); metrics = clinic_metrics(risk_rows=risks)
+    from services.crm_read_router import TENANT_AUTHORITATIVE_ENABLED, read_rows_bulk, resolve_current_organization_id
+
+    company = load_company()
+    org_id = resolve_current_organization_id()  # resolved once, threaded through every call below
+    # One shared fetch of every entity both patient_risk_summary() and
+    # clinic_metrics() need, instead of each opening its own — see
+    # services/crm_read_router.py's read_rows_bulk() docstring.
+    bulk = read_rows_bulk(list(_DASHBOARD_ENTITIES), organization_id=org_id) if TENANT_AUTHORITATIVE_ENABLED else None
+    risks = patient_risk_summary(organization_id=org_id, _bulk=bulk)
+    metrics = clinic_metrics(organization_id=org_id, risk_rows=risks, _bulk=bulk)
     business_name = company.get("business_name", "your clinic")
     st.markdown(f'''<div class="crm-hero"><div class="eyebrow">CLINIC DASHBOARD</div><h1>Dashboard</h1><p>Overview of {business_name}'s patients, appointments, care plans and operations.</p></div>''', unsafe_allow_html=True)
 

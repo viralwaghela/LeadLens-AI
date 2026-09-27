@@ -149,6 +149,15 @@ def _read_rows(entity: str, *, organization_id: int | None = None) -> list[dict[
     return read_rows(entity, legacy_reader=lambda: _read_rows_legacy(entity), organization_id=organization_id)
 
 
+def _exclude_archived(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if str(row.get("status", "")).strip().lower() != "archived"
+        and not bool(row.get("archived", False))
+    ]
+
+
 def list_records(
     entity: str,
     *,
@@ -158,12 +167,7 @@ def list_records(
     rows = _read_rows(entity, organization_id=organization_id)
     if include_archived:
         return rows
-    return [
-        row
-        for row in rows
-        if str(row.get("status", "")).strip().lower() != "archived"
-        and not bool(row.get("archived", False))
-    ]
+    return _exclude_archived(rows)
 
 
 def save_records(entity: str, rows: Iterable[dict[str, Any]]) -> None:
@@ -726,23 +730,53 @@ def _grouped_by_patient(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, 
     return grouped
 
 
-def patient_risk_summary(*, organization_id: int | None = None) -> list[dict[str, Any]]:
+def patient_risk_summary(
+    *,
+    organization_id: int | None = None,
+    _bulk: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     """Was an N+1: one list_records() call per patient (x4 entities) via
     patient_profile(), so a demo/clinic with 48 patients issued 190+ database round
     trips and could hang for tens of seconds (see docs/... the Reports-page hang this
     fixed). Reads each entity ONCE for the whole organization instead — a constant 5
     queries regardless of patient count — and groups rows by patient_id in Python.
     Also resolves the live organization ONCE (when the caller didn't already supply
-    one) instead of once per entity call — see resolve_current_organization_id()."""
-    if organization_id is None:
-        from services.crm_read_router import resolve_current_organization_id
+    one) instead of once per entity call — see resolve_current_organization_id().
 
-        organization_id = resolve_current_organization_id()
-    patients = list_records("patients", organization_id=organization_id)
-    appointments_by_patient = _grouped_by_patient(list_records("appointments", organization_id=organization_id))
-    packages_by_patient = _grouped_by_patient(list_records("packages", organization_id=organization_id))
-    payments_by_patient = _grouped_by_patient(list_records("payments", organization_id=organization_id))
-    notes_by_patient = _grouped_by_patient(list_records("progress_notes", organization_id=organization_id))
+    `_bulk`: an already-fetched read_rows_bulk() result (e.g. from
+    ui/crm_dashboard.py, which needs the same entities for clinic_metrics() too —
+    see that function's own `_bulk` parameter) to skip this function's own
+    read_rows_bulk() call entirely. Internal optimization hook, not meant for
+    general callers; every existing caller (none pass it) is unaffected."""
+    from services.crm_read_router import TENANT_AUTHORITATIVE_ENABLED, read_rows_bulk
+
+    entities = ("patients", "appointments", "packages", "payments", "progress_notes")
+    if _bulk is not None:
+        # organization_id is irrelevant here: the caller already fetched with
+        # whatever organization it resolved, so resolving it again would be a
+        # wasted database round trip for a value this branch never uses.
+        patients = _exclude_archived(_bulk["patients"])
+        appointments_by_patient = _grouped_by_patient(_exclude_archived(_bulk["appointments"]))
+        packages_by_patient = _grouped_by_patient(_exclude_archived(_bulk["packages"]))
+        payments_by_patient = _grouped_by_patient(_exclude_archived(_bulk["payments"]))
+        notes_by_patient = _grouped_by_patient(_exclude_archived(_bulk["progress_notes"]))
+    elif TENANT_AUTHORITATIVE_ENABLED:
+        # ONE session/transaction for all five entities instead of five separate
+        # ones — see read_rows_bulk()'s own docstring for why that matters against a
+        # remote database. Falls back to the per-entity list_records() path (still
+        # exactly what every non-Phase-8 deployment uses) whenever this flag is off.
+        bulk = read_rows_bulk(list(entities), organization_id=organization_id)
+        patients = _exclude_archived(bulk["patients"])
+        appointments_by_patient = _grouped_by_patient(_exclude_archived(bulk["appointments"]))
+        packages_by_patient = _grouped_by_patient(_exclude_archived(bulk["packages"]))
+        payments_by_patient = _grouped_by_patient(_exclude_archived(bulk["payments"]))
+        notes_by_patient = _grouped_by_patient(_exclude_archived(bulk["progress_notes"]))
+    else:
+        patients = list_records("patients", organization_id=organization_id)
+        appointments_by_patient = _grouped_by_patient(list_records("appointments", organization_id=organization_id))
+        packages_by_patient = _grouped_by_patient(list_records("packages", organization_id=organization_id))
+        payments_by_patient = _grouped_by_patient(list_records("payments", organization_id=organization_id))
+        notes_by_patient = _grouped_by_patient(list_records("progress_notes", organization_id=organization_id))
 
     results = []
     for patient in patients:
@@ -780,21 +814,42 @@ def clinic_metrics(
     *,
     organization_id: int | None = None,
     risk_rows: list[dict[str, Any]] | None = None,
+    _bulk: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """`risk_rows`: pass an already-computed patient_risk_summary() result (e.g. a
     caller that also needs the detailed rows, like ui/crm_dashboard.py) to avoid
     running that O(patients) computation twice in the same page load. Computed
     internally when omitted, so every existing caller is unaffected. Also resolves
-    the live organization ONCE — see resolve_current_organization_id()."""
-    if organization_id is None:
-        from services.crm_read_router import resolve_current_organization_id
+    the live organization ONCE, and — same as patient_risk_summary() — fetches its
+    five entities in one session/transaction when TENANT_AUTHORITATIVE_ENABLED,
+    instead of one per entity. See read_rows_bulk()'s docstring. `_bulk`: same
+    internal optimization hook as patient_risk_summary()'s own `_bulk` param —
+    ui/crm_dashboard.py fetches patients/appointments/packages/payments/
+    progress_notes/therapists ONCE and gives the relevant slice to both functions,
+    rather than each independently opening its own read_rows_bulk() session."""
+    from services.crm_read_router import TENANT_AUTHORITATIVE_ENABLED, read_rows_bulk
 
-        organization_id = resolve_current_organization_id()
-    patients = list_records("patients", organization_id=organization_id)
-    appointments = list_records("appointments", organization_id=organization_id)
-    packages = list_records("packages", organization_id=organization_id)
-    payments = list_records("payments", organization_id=organization_id)
-    therapists = list_records("therapists", organization_id=organization_id)
+    if _bulk is not None:
+        # organization_id unused in this branch, same reasoning as
+        # patient_risk_summary()'s own `_bulk` branch.
+        patients = _exclude_archived(_bulk["patients"])
+        appointments = _exclude_archived(_bulk["appointments"])
+        packages = _exclude_archived(_bulk["packages"])
+        payments = _exclude_archived(_bulk["payments"])
+        therapists = _exclude_archived(_bulk["therapists"])
+    elif TENANT_AUTHORITATIVE_ENABLED:
+        bulk = read_rows_bulk(["patients", "appointments", "packages", "payments", "therapists"], organization_id=organization_id)
+        patients = _exclude_archived(bulk["patients"])
+        appointments = _exclude_archived(bulk["appointments"])
+        packages = _exclude_archived(bulk["packages"])
+        payments = _exclude_archived(bulk["payments"])
+        therapists = _exclude_archived(bulk["therapists"])
+    else:
+        patients = list_records("patients", organization_id=organization_id)
+        appointments = list_records("appointments", organization_id=organization_id)
+        packages = list_records("packages", organization_id=organization_id)
+        payments = list_records("payments", organization_id=organization_id)
+        therapists = list_records("therapists", organization_id=organization_id)
     if risk_rows is None:
         risk_rows = patient_risk_summary(organization_id=organization_id)
     today = date.today().isoformat()
